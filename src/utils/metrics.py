@@ -52,6 +52,11 @@ cdr_queue_dropped = Counter(
     'Total number of CDRs dropped due to full queue'
 )
 
+cdr_filtered = Counter(
+    'asterisk_cdr_filtered_total',
+    'Total number of CDRs filtered out based on filter rules'
+)
+
 cdr_batch_processing_duration = Histogram(
     'asterisk_cdr_batch_processing_duration_seconds',
     'Time taken to process and send CDR batches',
@@ -158,6 +163,10 @@ def update_cdr_queue_depth(depth):
 def record_cdr_dropped():
     """Record a CDR dropped due to full queue"""
     cdr_queue_dropped.inc()
+
+def record_cdr_filtered():
+    """Record a CDR filtered out based on filter rules"""
+    cdr_filtered.inc()
 
 def record_cdr_batch_duration(duration):
     """

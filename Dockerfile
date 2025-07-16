@@ -24,6 +24,7 @@ FROM python:3.8-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    procps \
     && rm -rf /var/lib/apt/lists/* \
     && update-ca-certificates
 
@@ -38,6 +39,9 @@ WORKDIR /app
 COPY --chown=sipstack:sipstack src/ /app/
 COPY --chown=sipstack:sipstack requirements.txt /app/
 COPY --chown=sipstack:sipstack VERSION /app/
+
+# Make healthcheck script executable
+RUN chmod +x /app/healthcheck.py
 
 # Set environment variables
 ENV PATH="/opt/venv/bin:$PATH"
@@ -54,9 +58,9 @@ ENV BATCH_TIMEOUT=30
 # Switch to non-root user
 USER sipstack
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import socket; socket.create_connection(('localhost', 8000), timeout=5)" || exit 1
+# Health check - increased start period to allow for connection initialization
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python /app/healthcheck.py || exit 1
 
 # Expose metrics port
 EXPOSE 8000

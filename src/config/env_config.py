@@ -42,7 +42,16 @@ def load_config_from_env() -> Dict[str, Any]:
             'batch_force_timeout': int(os.getenv('CDR_BATCH_FORCE_TIMEOUT', '5')),  # Force flush interval
             'queue_size': int(os.getenv('CDR_QUEUE_SIZE', '10000')),
             'max_retries': int(os.getenv('CDR_MAX_RETRIES', '3')),
-            'max_concurrent': int(os.getenv('CDR_MAX_CONCURRENT', '10'))  # For direct mode
+            'max_concurrent': int(os.getenv('CDR_MAX_CONCURRENT', '10')),  # For direct mode
+            # Filtering options
+            'filter': {
+                'enabled': os.getenv('CDR_FILTER_ENABLED', 'false').lower() == 'true',
+                'queue_attempts': os.getenv('CDR_FILTER_QUEUE_ATTEMPTS', 'true').lower() == 'true',
+                'zero_duration': os.getenv('CDR_FILTER_ZERO_DURATION', 'true').lower() == 'true',
+                'internal_only': os.getenv('CDR_FILTER_INTERNAL_ONLY', 'false').lower() == 'true',
+                'min_duration': int(os.getenv('CDR_FILTER_MIN_DURATION', '0')),  # Minimum duration in seconds
+                'exclude_destinations': os.getenv('CDR_FILTER_EXCLUDE_DST', 's,h').split(','),  # Comma-separated list
+            }
         },
         'logging': {
             'level': os.getenv('LOG_LEVEL', 'INFO'),

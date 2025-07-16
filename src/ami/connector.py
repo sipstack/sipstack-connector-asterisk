@@ -61,7 +61,8 @@ class AmiConnector:
             # Create CDR monitor that adds to queue
             self.cdr_monitor = CDRMonitor(
                 queue=self.cdr_queue,
-                max_queue_size=queue_size
+                max_queue_size=queue_size,
+                filter_config=self.cdr_config.get('filter', {})
             )
             
             # Create worker based on mode

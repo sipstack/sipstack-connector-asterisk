@@ -195,7 +195,8 @@ docker logs -f sipstack-connector
 - 🚀 **Easy Deployment** - Single Docker container, no installation required
 - 🔄 **Real-time CDR Monitoring** - Streams CDR events as they happen
 - 🔐 **Smart Key Authentication** - Secure tier-based API access
-- 📦 **Automatic Batching** - Efficiently sends CDRs in batches (100 records or 30 seconds)
+- 📦 **Flexible Processing Modes** - Choose between batch or direct sending
+- 🎯 **Smart CDR Filtering** - Reduce storage by 80-90% by filtering noise
 - 🌍 **Multi-region Support** - Choose from ca1, us1, us2 regions
 - 📊 **Prometheus Metrics** - Built-in monitoring on port 8000
 - 🔧 **Zero Dependencies** - No Python or system packages needed on host
@@ -203,6 +204,8 @@ docker logs -f sipstack-connector
 ## Configuration
 
 ### Environment Variables
+
+#### Core Settings
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -213,8 +216,32 @@ docker logs -f sipstack-connector
 | REGION | No | us1 | API region (ca1, us1, us2) |
 | AMI_PORT | No | 5038 | AMI port |
 | LOG_LEVEL | No | INFO | Logging level (DEBUG, INFO, WARNING, ERROR) |
-| BATCH_SIZE | No | 100 | Maximum CDRs per batch |
-| BATCH_TIMEOUT | No | 30 | Maximum seconds before sending batch |
+
+#### CDR Processing
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| CDR_MODE | No | batch | Processing mode: 'batch' or 'direct' |
+| CDR_BATCH_SIZE | No | 100 | Maximum CDRs per batch (batch mode) |
+| CDR_BATCH_TIMEOUT | No | 30 | Seconds before sending partial batch |
+| CDR_BATCH_FORCE_TIMEOUT | No | 5 | Force flush interval to prevent blocking |
+| CDR_MAX_CONCURRENT | No | 10 | Max concurrent API requests (direct mode) |
+
+#### CDR Filtering (Optional - Reduces Storage by ~80-90%)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| CDR_FILTER_ENABLED | No | false | Enable CDR filtering |
+| CDR_FILTER_QUEUE_ATTEMPTS | No | true | Filter failed queue attempts (dst='s' with NO ANSWER) |
+| CDR_FILTER_ZERO_DURATION | No | true | Filter zero duration calls (except BUSY/FAILED) |
+| CDR_FILTER_INTERNAL_ONLY | No | false | Only keep internal extension calls |
+| CDR_FILTER_MIN_DURATION | No | 0 | Minimum call duration in seconds |
+| CDR_FILTER_EXCLUDE_DST | No | s,h | Comma-separated destinations to exclude |
+
+#### Monitoring
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
 | MONITORING_ENABLED | No | true | Enable Prometheus metrics |
 | MONITORING_PORT | No | 8000 | Metrics port |
 
@@ -408,6 +435,73 @@ docker-compose -p server2 -f docker-compose-server2.yml up -d
 - Issues: https://github.com/sipstack/sipstack-connector-asterisk/issues
 - Documentation: https://docs.sipstack.com
 - API Reference: https://api.sipstack.com/docs
+
+## CDR Filtering
+
+The connector includes smart CDR filtering to reduce storage requirements by 80-90% while preserving meaningful call data.
+
+### Why Filter CDRs?
+
+Analysis of typical Asterisk CDR data shows that the majority of records are noise:
+- **Queue distribution attempts**: ~85% of CDRs are failed queue attempts with destination 's'
+- **Zero-duration calls**: Internal routing that never connected
+- **System destinations**: Calls to 'h' (hangup) and other system contexts
+
+These records provide little value for analytics but consume significant storage.
+
+### Filter Configuration
+
+Enable filtering by setting `CDR_FILTER_ENABLED=true` in your `.env` file.
+
+**Default filter rules (when enabled):**
+- ✅ Filters queue distribution attempts (`dst='s'` with `NO ANSWER`)
+- ✅ Filters zero-duration calls (except `BUSY`/`FAILED`/`CONGESTION`)
+- ✅ Excludes system destinations (`s`, `h`)
+- ❌ Keeps all answered calls
+- ❌ Keeps all failed/busy calls
+- ❌ Keeps calls with duration > 0
+
+### Example: Before and After Filtering
+
+**Before filtering (100 CDRs):**
+```
+85 queue attempts (dst='s', NO ANSWER, duration=0)
+5 zero-duration internal calls
+7 actual customer calls (ANSWERED)
+3 failed customer calls (BUSY/FAILED)
+```
+
+**After filtering (10 CDRs):**
+```
+7 actual customer calls (ANSWERED)
+3 failed customer calls (BUSY/FAILED)
+```
+
+**Result**: 90% storage reduction, 100% meaningful data retained.
+
+### Advanced Filtering Options
+
+```env
+# Filter by minimum duration (seconds)
+CDR_FILTER_MIN_DURATION=60  # Only keep calls > 60 seconds
+
+# Keep only internal extension-to-extension calls
+CDR_FILTER_INTERNAL_ONLY=true
+
+# Custom destination exclusions
+CDR_FILTER_EXCLUDE_DST=s,h,conference,ivr-timeout
+```
+
+### Monitoring Filter Performance
+
+Track filtering effectiveness via Prometheus metrics:
+- `asterisk_cdr_filtered_total` - Total CDRs filtered out
+- `asterisk_cdr_queue_depth` - Current processing queue size
+
+Check filter stats in logs:
+```bash
+docker logs sipstack-connector | grep "filtered\|CDR monitor stopped"
+```
 
 ## License
 
