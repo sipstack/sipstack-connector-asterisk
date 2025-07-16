@@ -72,13 +72,16 @@ class ApiRegionalCDRClient:
         await self.stop()
         
     async def start(self):
-        """Start the client session."""
+        """Start the client session with optimized settings for high performance."""
         if not self._session:
+            # Use simple session configuration that works
             timeout = aiohttp.ClientTimeout(total=self.timeout)
+            
             # Set custom headers including User-Agent
             headers = {
                 'User-Agent': f'SIPSTACK-Connector-Asterisk/{__version__}'
             }
+            
             self._session = aiohttp.ClientSession(
                 timeout=timeout,
                 headers=headers
@@ -190,6 +193,9 @@ class ApiRegionalCDRClient:
         Args:
             records: List of CDR record dictionaries
         """
+        if not self._session:
+            raise RuntimeError("Client not started. Call start() first.")
+            
         url = f"{self.api_base_url}/mqs/cdr/batch"
         
         headers = self._get_headers()
@@ -204,15 +210,12 @@ class ApiRegionalCDRClient:
         
         try:
             logger.debug("Making POST request to API...")
-            timeout = aiohttp.ClientTimeout(total=10, connect=5, sock_read=5)
-            logger.debug(f"Using timeout: {timeout}")
             
-            logger.debug("About to call session.post...")
+            # Use the persistent session with proper SSL handling
             async with self._session.post(
                 url,
                 headers=headers,
-                json=records,
-                timeout=timeout
+                json=records
             ) as response:
                 logger.debug(f"Response received - status: {response.status}")
                 
@@ -234,13 +237,11 @@ class ApiRegionalCDRClient:
                 self.metrics.increment('cdr_inserted', len(records))
                 logger.debug(f"Sent {len(records)} CDR records")
                 
-            logger.info(f"Batch successfully sent and processed")
-                
         except aiohttp.ClientError as e:
             logger.error(f"HTTP client error sending batch: {e}", exc_info=True)
             raise
         except asyncio.TimeoutError as e:
-            logger.error(f"Timeout error sending batch after 10 seconds: {e}", exc_info=True)
+            logger.error(f"Timeout error sending batch: {e}", exc_info=True)
             raise
         except Exception as e:
             logger.error(f"Unexpected error sending batch: {e}", exc_info=True)
@@ -290,10 +291,14 @@ class ApiRegionalCDRClient:
             url = f"{self.api_base_url}/health"
             logger.info(f"Testing connection to {url}")
             
+            # Use consistent headers with the rest of the client
+            headers = self._get_headers()
+            # Remove Content-Type for GET request
+            headers.pop('Content-Type', None)
+            
             async with self._session.get(
                 url,
-                headers={'Authorization': f'Bearer {self.api_key}'},
-                timeout=aiohttp.ClientTimeout(total=10)
+                headers=headers
             ) as response:
                 logger.info(f"Connection test response: {response.status}")
                 # Any non-5xx response means the connection works

@@ -4,12 +4,21 @@ import os
 from pathlib import Path
 
 # Read version from VERSION file
-VERSION_FILE = Path(__file__).parent.parent / "VERSION"
+# Try multiple paths to handle different runtime environments
+possible_paths = [
+    Path(__file__).parent.parent / "VERSION",  # Development
+    Path("/app/VERSION"),  # Docker container
+    Path("VERSION"),  # Current directory
+]
 
-try:
-    __version__ = VERSION_FILE.read_text().strip()
-except FileNotFoundError:
-    __version__ = "0.1.0"  # Fallback version
+__version__ = "0.1.0"  # Default fallback
+for version_path in possible_paths:
+    try:
+        if version_path.exists():
+            __version__ = version_path.read_text().strip()
+            break
+    except Exception:
+        continue
 
 # Version components
 VERSION_INFO = tuple(int(x) for x in __version__.split('.'))

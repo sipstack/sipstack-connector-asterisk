@@ -1,10 +1,9 @@
-"""Unified API client supporting both sentiment and CDR."""
+"""Unified API client supporting CDR ingestion."""
 
 import asyncio
 import logging
 from typing import Dict, Any, Optional
 
-from .client import SentimentApiClient
 from .cdr_client import ApiRegionalCDRClient
 from models.cdr import CDRBatch
 
@@ -12,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class UnifiedApiClient:
-    """Unified client for sentiment API and API-Regional CDR."""
+    """Unified client for API-Regional CDR ingestion."""
     
     def __init__(self,
                  sentiment_config: Optional[Dict[str, Any]] = None,
@@ -21,27 +20,21 @@ class UnifiedApiClient:
         Initialize unified API client.
         
         Args:
-            sentiment_config: Configuration for sentiment API
+            sentiment_config: Legacy parameter, ignored
             cdr_config: Configuration for CDR/API-Regional service
         """
-        # Initialize sentiment client if configured
-        self.sentiment_client = None
-        if sentiment_config and sentiment_config.get('enabled', False):
-            self.sentiment_client = SentimentApiClient(
-                base_url=sentiment_config['base_url'],
-                token=sentiment_config['token'],
-                timeout=sentiment_config.get('timeout', 30),
-                retry_attempts=sentiment_config.get('retry_attempts', 3)
-            )
-            
         # Initialize CDR client if configured
         self.cdr_client = None
         if cdr_config and cdr_config.get('enabled', False):
+            # Add host information to CDR client
+            host_info = cdr_config.get('host_info', {})
+            
             self.cdr_client = ApiRegionalCDRClient(
                 api_base_url=cdr_config['api_base_url'],
                 api_key=cdr_config['api_key'],
                 timeout=cdr_config.get('timeout', 30.0),
-                max_retries=cdr_config.get('max_retries', 3)
+                max_retries=cdr_config.get('max_retries', 3),
+                host_info=host_info
             )
             
     async def start(self):
@@ -52,28 +45,22 @@ class UnifiedApiClient:
             
     async def close(self):
         """Close all configured clients."""
-        if self.sentiment_client:
-            await self.sentiment_client.close()
-            
         if self.cdr_client:
             await self.cdr_client.stop()
             
     async def upload_recording(self, file_path: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Upload recording to sentiment API (backward compatibility).
+        Legacy method - recordings are not processed in CDR-only mode.
         
         Args:
             file_path: Path to recording file
             metadata: Recording metadata
             
         Returns:
-            API response
+            Empty dict
         """
-        if not self.sentiment_client:
-            logger.warning("Sentiment API not configured, skipping upload")
-            return {}
-            
-        return await self.sentiment_client.upload_recording(file_path, metadata)
+        logger.debug("Recording upload called in CDR-only mode, ignoring")
+        return {}
         
     async def send_cdr_batch(self, batch: CDRBatch):
         """
@@ -97,9 +84,6 @@ class UnifiedApiClient:
         """
         results = {}
         
-        if self.sentiment_client:
-            results['sentiment'] = await self.sentiment_client.test_connectivity()
-            
         if self.cdr_client:
             results['cdr'] = await self.cdr_client.test_connection()
             

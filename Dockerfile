@@ -37,6 +37,7 @@ COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 COPY --chown=sipstack:sipstack src/ /app/
 COPY --chown=sipstack:sipstack requirements.txt /app/
+COPY --chown=sipstack:sipstack VERSION /app/
 
 # Set environment variables
 ENV PATH="/opt/venv/bin:$PATH"

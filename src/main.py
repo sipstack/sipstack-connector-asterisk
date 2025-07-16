@@ -70,11 +70,20 @@ async def main():
         # Setup CDR configuration
         cdr_config = config.get('cdr', {})
         if 'api' in config and cdr_config.get('enabled', True):
+            # Get host information for CDR metadata
+            import socket
+            host_info = {
+                'hostname': socket.gethostname(),
+                'region': config.get('region', 'us-east'),
+                'customer_id': config.get('customer_id', ''),
+            }
+            
             cdr_config.update({
                 'api_base_url': config['api']['url'],
                 'api_key': config['api']['token'],
                 'timeout': config['api'].get('timeout', 30),
-                'max_retries': config['api'].get('retry_attempts', 3)
+                'max_retries': config['api'].get('retry_attempts', 3),
+                'host_info': host_info
             })
         
         api_client = UnifiedApiClient(
@@ -132,7 +141,7 @@ async def main():
         if api_client:
             await api_client.close()
                 
-        logging.info("Asterisk Sentiment Connector shutdown complete")
+        logging.info("SIPSTACK Asterisk Connector shutdown complete")
 
 async def shutdown():
     logging.info("Shutdown requested")

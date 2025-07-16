@@ -36,8 +36,8 @@ def load_config_from_env() -> Dict[str, Any]:
         },
         'cdr': {
             'enabled': os.getenv('CDR_ENABLED', 'true').lower() == 'true',
-            'batch_size': int(os.getenv('BATCH_SIZE', '100')),
-            'batch_timeout': int(os.getenv('BATCH_TIMEOUT', '30'))
+            'batch_size': int(os.getenv('CDR_BATCH_SIZE', '100')),
+            'batch_timeout': int(os.getenv('CDR_BATCH_TIMEOUT', '30'))
         },
         'logging': {
             'level': os.getenv('LOG_LEVEL', 'INFO'),
