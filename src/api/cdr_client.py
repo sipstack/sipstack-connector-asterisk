@@ -170,7 +170,7 @@ class ApiRegionalCDRClient:
                 logger.debug(f"Added {len(batch.cels)} CELs")
             
             if records:
-                logger.info(f"Sending {len(records)} records to {self.api_base_url}/mqs/cdr/batch")
+                logger.info(f"Sending {len(records)} records to {self.api_base_url}/v1/mqs/cdr/batch")
                 await self._send_batch_records(records)
                 
             # Record metrics
@@ -196,7 +196,7 @@ class ApiRegionalCDRClient:
         if not self._session:
             raise RuntimeError("Client not started. Call start() first.")
             
-        url = f"{self.api_base_url}/mqs/cdr/batch"
+        url = f"{self.api_base_url}/v1/mqs/cdr/batch"
         
         headers = self._get_headers()
         logger.debug(f"Request URL: {url}")
@@ -253,7 +253,7 @@ class ApiRegionalCDRClient:
         Args:
             cdr: CDR dictionary
         """
-        url = f"{self.api_base_url}/mqs/cdr"
+        url = f"{self.api_base_url}/v1/mqs/cdr"
         
         headers = self._get_headers()
         
