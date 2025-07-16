@@ -160,7 +160,7 @@ docker run -d \
   --log-driver json-file \
   --log-opt max-size=10m \
   --log-opt max-file=3 \
-  sipstack/asterisk-connector:latest
+  sipstack/connector-asterisk:latest
 ```
 
 **Option 2:** Direct environment variables
@@ -177,7 +177,7 @@ docker run -d \
   --log-driver json-file \
   --log-opt max-size=10m \
   --log-opt max-file=3 \
-  sipstack/asterisk-connector:latest
+  sipstack/connector-asterisk:latest
 ```
 
 ### 4. Verify
@@ -186,7 +186,7 @@ docker run -d \
 # Docker Compose
 docker-compose logs -f
 
-# Docker Run  
+# Docker Run
 docker logs -f sipstack-connector
 ```
 
@@ -241,7 +241,7 @@ chmod +x status.sh
 
 **What it checks:**
 - 🔍 **Asterisk Service**: Binary location, process status, version info
-- 🔌 **AMI Configuration**: Port listening, manager.conf settings, user permissions  
+- 🔌 **AMI Configuration**: Port listening, manager.conf settings, user permissions
 - 📊 **CDR Setup**: CDR logging status, cdr_manager module, configuration files
 - 🐳 **Docker Environment**: Installation, daemon status, existing containers
 - 🌐 **Network Connectivity**: AMI port access, internet connection, Docker Hub
@@ -343,7 +343,7 @@ telnet localhost 5038
 
 # Should show: Asterisk Call Manager/X.X.X
 # Login with: Action: Login
-#             Username: manager-sipstack  
+#             Username: manager-sipstack
 #             Secret: your_password
 ```
 
