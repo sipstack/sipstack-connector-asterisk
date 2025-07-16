@@ -99,9 +99,9 @@ class ApiRegionalCDRClient:
         """Get request headers."""
         headers = {
             'Content-Type': 'application/json',
-            'Authorization': f'Bearer {self.api_key}',
-            'User-Agent': f'SIPSTACK-Connector-Asterisk/{__version__} (Python/aiohttp)'
+            'Authorization': f'Bearer {self.api_key}'
         }
+        # User-Agent is already set in session headers
         
         return headers
     
@@ -211,7 +211,6 @@ class ApiRegionalCDRClient:
         try:
             logger.debug("Making POST request to API...")
             
-            # Use the persistent session with proper SSL handling
             async with self._session.post(
                 url,
                 headers=headers,
