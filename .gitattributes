@@ -1,0 +1,55 @@
+# Git attributes for excluding files from archive/export
+# Used by git archive command in sync-to-github.sh
+
+# Claude/AI assistant files
+.claude/ export-ignore
+CLAUDE.md export-ignore
+DEVELOPMENT_PLAN.md export-ignore
+
+# Development environment
+.ropeproject/ export-ignore
+.vscode/ export-ignore
+.idea/ export-ignore
+
+# Internal files
+.gitea/ export-ignore
+.giteapublic-ignore export-ignore
+scripts/sync-to-github.sh export-ignore
+scripts/prepare-github-sync.sh export-ignore
+scripts/create-release.sh export-ignore
+# Keep scripts/lib/ - needed for installer
+# Keep scripts/templates/ - needed for installer
+
+# Environment files (except examples)
+.env export-ignore
+.env.* export-ignore
+
+# Configuration files (except examples)
+*.conf export-ignore
+
+# Backup and temporary files
+*.bak export-ignore
+*.backup export-ignore
+*~ export-ignore
+
+# Local development
+scratch/ export-ignore
+notes.txt export-ignore
+local-* export-ignore
+dev-* export-ignore
+
+# Private documentation
+docs/internal/ export-ignore
+docs/private/ export-ignore
+INTERNAL.md export-ignore
+PRIVATE.md export-ignore
+TODO.private export-ignore
+
+# Test data
+tests/fixtures/real-* export-ignore
+tests/data/production-* export-ignore
+
+# Deployment specific
+deploy/private/ export-ignore
+deploy/internal/ export-ignore
+config/production/ export-ignore

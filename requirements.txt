@@ -1,0 +1,24 @@
+# Asterisk Sentiment Connector Requirements
+# For Python version specific requirements:
+# - Python 3.6: pip install -r requirements-py36.txt
+# - Python 3.7+: pip install -r requirements-py37.txt
+
+# Base requirements (works with Python 3.6+)
+aiohttp>=3.7.4
+pyyaml>=5.1
+panoramisk>=1.2
+requests>=2.25.1
+tenacity>=7.0.0
+prometheus-client>=0.11.0
+
+# CDR/API requirements
+python-dotenv>=0.19.0
+backoff>=2.0.0  # For retry logic
+
+# Python 3.6 users must also install:
+# dataclasses>=0.6
+
+# Testing (optional)
+pytest>=6.2.5
+pytest-asyncio>=0.15.1
+pytest-mock>=3.6.1

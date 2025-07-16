@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  sipstack-connector:
+    image: sipstack/asterisk-connector:latest
+    container_name: sipstack-connector
+    restart: unless-stopped
+    network_mode: host
+    
+    environment:
+      # Required Configuration
+      API_KEY: ${API_KEY}                    # Your SIPSTACK API key (sk_t{tier}_{customer}_{token})
+      AMI_HOST: ${AMI_HOST}                  # Asterisk server hostname/IP
+      AMI_PORT: ${AMI_PORT:-5038}            # AMI port (default: 5038)
+      AMI_USERNAME: ${AMI_USERNAME}          # AMI username
+      AMI_PASSWORD: ${AMI_PASSWORD}          # AMI password
+      REGION: ${REGION:-us1}                 # API region (ca1, us1, us2)
+      
+      # Optional Configuration
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}          # Logging level
+      BATCH_SIZE: ${BATCH_SIZE:-100}         # CDR batch size
+      BATCH_TIMEOUT: ${BATCH_TIMEOUT:-30}    # Batch timeout in seconds
+      
+      # Monitoring
+      MONITORING_ENABLED: ${MONITORING_ENABLED:-true}
+      MONITORING_PORT: ${MONITORING_PORT:-8000}
+    
+    # Note: Using host networking - metrics available on host port 8000
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Resource limits (optional)
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+# Optional: External network if Asterisk is in Docker
+# networks:
+#   default:
+#     external:
+#       name: asterisk-network
