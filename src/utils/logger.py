@@ -57,5 +57,11 @@ def setup_logging(config: Dict[str, Any]) -> None:
     logging.getLogger('aiohttp').setLevel(logging.WARNING)
     logging.getLogger('asyncio').setLevel(logging.WARNING)
     
+    # Set panoramisk to WARNING to reduce noise when in DEBUG mode
+    if level == logging.DEBUG:
+        logging.getLogger('panoramisk').setLevel(logging.WARNING)
+        logging.getLogger('panoramisk.manager').setLevel(logging.WARNING)
+        logging.getLogger('panoramisk.ami_protocol').setLevel(logging.WARNING)
+    
     # Log startup message
     logging.info(f"Logging initialized at level {level_name}")

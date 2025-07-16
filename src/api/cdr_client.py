@@ -256,20 +256,29 @@ class ApiRegionalCDRClient:
         Returns:
             True if connection is successful
         """
+        if not self._session:
+            logger.error("Connection test failed: Session not initialized")
+            return False
+            
         try:
-            # Try to send an empty CDR to test endpoint (if available)
-            # Or use a health check endpoint
+            # Try health check endpoint
             url = f"{self.api_base_url}/health"
+            logger.info(f"Testing connection to {url}")
             
             async with self._session.get(
                 url,
-                headers={'Authorization': f'Bearer {self.api_key}'}
+                headers={'Authorization': f'Bearer {self.api_key}'},
+                timeout=aiohttp.ClientTimeout(total=10)
             ) as response:
+                logger.info(f"Connection test response: {response.status}")
                 # Any non-5xx response means the connection works
                 return response.status < 500
                 
+        except aiohttp.ClientError as e:
+            logger.error(f"Connection test failed with client error: {e}")
+            return False
         except Exception as e:
-            logger.error(f"Connection test failed: {e}")
+            logger.error(f"Connection test failed: {e}", exc_info=True)
             return False
             
     def get_stats(self) -> Dict[str, Any]:
