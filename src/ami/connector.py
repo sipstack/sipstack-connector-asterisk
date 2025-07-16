@@ -319,7 +319,7 @@ class AmiConnector:
             if hasattr(self.api_client, 'send_cdr_batch'):
                 logger.debug("API client has send_cdr_batch method, calling it")
                 await self.api_client.send_cdr_batch(batch)
-                logger.debug("send_cdr_batch completed successfully")
+                logger.info(f"Successfully sent CDR batch of {batch.size} records")
             else:
                 logger.warning("API client does not support CDR batch sending")
         except Exception as e:

@@ -75,7 +75,14 @@ class ApiRegionalCDRClient:
         """Start the client session."""
         if not self._session:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
-            self._session = aiohttp.ClientSession(timeout=timeout)
+            # Set custom headers including User-Agent
+            headers = {
+                'User-Agent': f'SIPSTACK-Connector-Asterisk/{__version__}'
+            }
+            self._session = aiohttp.ClientSession(
+                timeout=timeout,
+                headers=headers
+            )
         logger.info("API-Regional CDR client started")
         
     async def stop(self):
@@ -226,6 +233,8 @@ class ApiRegionalCDRClient:
                     
                 self.metrics.increment('cdr_inserted', len(records))
                 logger.debug(f"Sent {len(records)} CDR records")
+                
+            logger.info(f"Batch successfully sent and processed")
                 
         except aiohttp.ClientError as e:
             logger.error(f"HTTP client error sending batch: {e}", exc_info=True)
