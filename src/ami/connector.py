@@ -16,6 +16,7 @@ from utils.metrics import (
     record_ami_connection_status
 )
 from .cdr_monitor import CDRMonitor
+from .http_worker import HTTPWorker
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +47,29 @@ class AmiConnector:
         self.recording_paths = recording_config.get('paths', ['/var/spool/asterisk/monitor'])
         self.voicemail_paths = voicemail_config.get('paths', ['/var/spool/asterisk/voicemail'])
         
-        # Initialize CDR monitor if enabled
+        # Initialize CDR processing components if enabled
         self.cdr_monitor = None
+        self.http_worker = None
+        self.cdr_queue = None
+        
         if self.cdr_config.get('enabled', False):
+            # Create async queue for CDR/CEL records
+            queue_size = self.cdr_config.get('queue_size', 10000)
+            self.cdr_queue = asyncio.Queue(maxsize=queue_size)
+            
+            # Create CDR monitor that adds to queue
             self.cdr_monitor = CDRMonitor(
-                on_batch_ready=self._send_cdr_batch,
+                queue=self.cdr_queue,
+                max_queue_size=queue_size
+            )
+            
+            # Create HTTP worker that consumes from queue
+            self.http_worker = HTTPWorker(
+                queue=self.cdr_queue,
+                api_client=self.api_client,
                 batch_size=self.cdr_config.get('batch_size', 100),
-                batch_timeout=self.cdr_config.get('batch_timeout', 30.0)
+                batch_timeout=self.cdr_config.get('batch_timeout', 30.0),
+                max_retries=self.cdr_config.get('max_retries', 3)
             )
         
     async def connect(self) -> bool:
@@ -82,10 +99,14 @@ class AmiConnector:
             self.connected = True
             logger.info("Successfully connected to Asterisk AMI")
             
-            # Start CDR monitor if enabled
+            # Start CDR monitor and HTTP worker if enabled
             if self.cdr_monitor:
                 await self.cdr_monitor.start()
                 logger.info("CDR monitoring started")
+                
+            if self.http_worker:
+                await self.http_worker.start()
+                logger.info("HTTP worker started for CDR batch processing")
             
             # Update metrics with connection status
             record_ami_connection_status(True)
@@ -114,6 +135,11 @@ class AmiConnector:
             if self.cdr_monitor:
                 await self.cdr_monitor.stop()
                 logger.info("CDR monitoring stopped")
+                
+            # Stop HTTP worker if running
+            if self.http_worker:
+                await self.http_worker.stop()
+                logger.info("HTTP worker stopped")
             
             self.ami_client.close()
             self.connected = False
@@ -311,16 +337,3 @@ class AmiConnector:
             
             # Record failure in metrics
             record_processed_recording(recording_type, 'error')
-    
-    async def _send_cdr_batch(self, batch) -> None:
-        """Send CDR batch to API client."""
-        logger.debug(f"_send_cdr_batch called with batch size: {batch.size}")
-        try:
-            if hasattr(self.api_client, 'send_cdr_batch'):
-                logger.debug("API client has send_cdr_batch method, calling it")
-                await self.api_client.send_cdr_batch(batch)
-                logger.info(f"Successfully sent CDR batch of {batch.size} records")
-            else:
-                logger.warning("API client does not support CDR batch sending")
-        except Exception as e:
-            logger.error(f"Error sending CDR batch: {e}", exc_info=True)

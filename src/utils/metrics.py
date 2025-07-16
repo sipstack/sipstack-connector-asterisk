@@ -41,6 +41,28 @@ voicemail_recordings = Counter(
     ['mailbox']
 )
 
+# CDR Queue metrics
+cdr_queue_depth = Gauge(
+    'asterisk_cdr_queue_depth',
+    'Current number of CDRs in processing queue'
+)
+
+cdr_queue_dropped = Counter(
+    'asterisk_cdr_queue_dropped_total',
+    'Total number of CDRs dropped due to full queue'
+)
+
+cdr_batch_processing_duration = Histogram(
+    'asterisk_cdr_batch_processing_duration_seconds',
+    'Time taken to process and send CDR batches',
+    buckets=(0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0)
+)
+
+cdr_http_worker_status = Gauge(
+    'asterisk_cdr_http_worker_status',
+    'HTTP worker status (1=running, 0=stopped)'
+)
+
 api_errors = Counter(
     'asterisk_sentiment_api_errors_total',
     'Number of API errors encountered',
@@ -123,6 +145,37 @@ def record_api_error(error_type):
         error_type: Type of error encountered
     """
     api_errors.labels(error_type=error_type).inc()
+
+def update_cdr_queue_depth(depth):
+    """
+    Update CDR queue depth metric
+    
+    Args:
+        depth: Current queue depth
+    """
+    cdr_queue_depth.set(depth)
+
+def record_cdr_dropped():
+    """Record a CDR dropped due to full queue"""
+    cdr_queue_dropped.inc()
+
+def record_cdr_batch_duration(duration):
+    """
+    Record CDR batch processing duration
+    
+    Args:
+        duration: Processing duration in seconds
+    """
+    cdr_batch_processing_duration.observe(duration)
+
+def update_http_worker_status(running):
+    """
+    Update HTTP worker status
+    
+    Args:
+        running: Boolean indicating if worker is running
+    """
+    cdr_http_worker_status.set(1 if running else 0)
 
 
 class MetricsCollector:

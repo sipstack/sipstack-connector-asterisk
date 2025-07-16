@@ -1,39 +1,35 @@
-"""CDR monitoring for AMI events."""
+"""CDR monitoring for AMI events with queue-based processing."""
 
 import asyncio
 import logging
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 
-from models.cdr import CDR, CEL, CDRBatch
-from utils.metrics import MetricsCollector
+from models.cdr import CDR, CEL
+from utils.metrics import MetricsCollector, update_cdr_queue_depth, record_cdr_dropped
 
 logger = logging.getLogger(__name__)
 
 
 class CDRMonitor:
-    """Monitor and process CDR/CEL events from Asterisk."""
+    """Monitor and process CDR/CEL events from Asterisk using async queue."""
     
     def __init__(self, 
-                 on_batch_ready: Callable[[CDRBatch], None],
-                 batch_size: int = 100,
-                 batch_timeout: float = 30.0):
+                 queue: asyncio.Queue,
+                 max_queue_size: int = 10000):
         """
         Initialize CDR monitor.
         
         Args:
-            on_batch_ready: Callback when batch is ready to send
-            batch_size: Max records before triggering batch send
-            batch_timeout: Max seconds before triggering batch send
+            queue: AsyncIO queue to add CDR/CEL records to
+            max_queue_size: Maximum queue size before applying backpressure
         """
-        self.on_batch_ready = on_batch_ready
-        self.batch_size = batch_size
-        self.batch_timeout = batch_timeout
+        self.queue = queue
+        self.max_queue_size = max_queue_size
         
-        self.batch = CDRBatch()
         self.metrics = MetricsCollector()
-        self._batch_timer: Optional[asyncio.Task] = None
         self._running = False
+        self._dropped_count = 0
         
     async def start(self):
         """Start the CDR monitor."""
@@ -41,12 +37,9 @@ class CDRMonitor:
         logger.info("CDR monitor started")
         
     async def stop(self):
-        """Stop the CDR monitor and flush batch."""
+        """Stop the CDR monitor."""
         self._running = False
-        if self._batch_timer:
-            self._batch_timer.cancel()
-        await self._flush_batch()
-        logger.info("CDR monitor stopped")
+        logger.info(f"CDR monitor stopped (dropped {self._dropped_count} records due to full queue)")
         
     async def handle_cdr_event(self, manager, event: Dict[str, Any]):
         """Handle CDR event from AMI."""
@@ -58,14 +51,24 @@ class CDRMonitor:
             # Create CDR from event
             cdr = CDR.from_ami_event(event)
             
-            # Add to batch
-            self.batch.add_cdr(cdr)
-            self.metrics.increment('cdr_received')
+            # Try to add to queue with non-blocking put
+            try:
+                self.queue.put_nowait(cdr)
+                self.metrics.increment('cdr_received')
+                logger.debug(f"CDR added to queue: {cdr.uniqueid} ({cdr.src} -> {cdr.dst})")
+                # Update queue depth metric
+                update_cdr_queue_depth(self.queue.qsize())
+            except asyncio.QueueFull:
+                self._dropped_count += 1
+                self.metrics.increment('cdr_dropped')
+                record_cdr_dropped()  # Update Prometheus metric
+                logger.warning(
+                    f"Queue full ({self.queue.qsize()}/{self.max_queue_size}), "
+                    f"dropping CDR: {cdr.uniqueid}"
+                )
             
-            logger.debug(f"CDR added to batch: {cdr.uniqueid} ({cdr.src} -> {cdr.dst})")
-            
-            # Check if batch is ready
-            await self._check_batch()
+            # Yield control to prevent event loop blocking
+            await asyncio.sleep(0)
             
         except Exception as e:
             logger.error(f"Error handling CDR event: {e}", exc_info=True)
@@ -81,69 +84,34 @@ class CDRMonitor:
             # Create CEL from event
             cel = CEL.from_ami_event(event)
             
-            # Add to batch
-            self.batch.add_cel(cel)
-            self.metrics.increment('cel_received')
+            # Try to add to queue with non-blocking put
+            try:
+                self.queue.put_nowait(cel)
+                self.metrics.increment('cel_received')
+                logger.debug(f"CEL added to queue: {cel.uniqueid} ({cel.eventtype})")
+                # Update queue depth metric
+                update_cdr_queue_depth(self.queue.qsize())
+            except asyncio.QueueFull:
+                self._dropped_count += 1
+                self.metrics.increment('cel_dropped')
+                record_cdr_dropped()  # Update Prometheus metric
+                logger.warning(
+                    f"Queue full ({self.queue.qsize()}/{self.max_queue_size}), "
+                    f"dropping CEL: {cel.uniqueid}"
+                )
             
-            logger.debug(f"CEL added to batch: {cel.uniqueid} ({cel.eventtype})")
-            
-            # Check if batch is ready
-            await self._check_batch()
+            # Yield control to prevent event loop blocking
+            await asyncio.sleep(0)
             
         except Exception as e:
             logger.error(f"Error handling CEL event: {e}", exc_info=True)
             self.metrics.increment('cel_error')
             
-    async def _check_batch(self):
-        """Check if batch should be sent."""
-        logger.debug(f"Checking batch: size={self.batch.size}, threshold={self.batch_size}")
-        if self.batch.size >= self.batch_size:
-            logger.info(f"Batch size {self.batch.size} reached threshold {self.batch_size}, flushing")
-            await self._flush_batch()
-        elif not self._batch_timer:
-            # Start batch timer
-            logger.debug(f"Starting batch timer for {self.batch_timeout} seconds")
-            self._batch_timer = asyncio.create_task(self._batch_timeout())
-            
-    async def _batch_timeout(self):
-        """Wait for batch timeout and flush."""
-        try:
-            await asyncio.sleep(self.batch_timeout)
-            await self._flush_batch()
-        except asyncio.CancelledError:
-            pass
-            
-    async def _flush_batch(self):
-        """Flush the current batch."""
-        if self.batch.size == 0:
-            return
-            
-        # Cancel timer if running
-        if self._batch_timer:
-            self._batch_timer.cancel()
-            self._batch_timer = None
-            
-        # Get batch data
-        batch_data = self.batch
-        
-        # Create new batch
-        self.batch = CDRBatch()
-        
-        # Send batch
-        try:
-            logger.info(f"Flushing batch with {batch_data.size} records")
-            await self.on_batch_ready(batch_data)
-            self.metrics.increment('batch_sent')
-            self.metrics.increment('records_sent', batch_data.size)
-        except Exception as e:
-            logger.error(f"Error sending batch: {e}", exc_info=True)
-            self.metrics.increment('batch_error')
-            # TODO: Implement retry logic or dead letter queue
-            
     def get_stats(self) -> Dict[str, Any]:
         """Get monitor statistics."""
         return {
-            'current_batch_size': self.batch.size,
+            'queue_size': self.queue.qsize(),
+            'dropped_count': self._dropped_count,
             'metrics': self.metrics.get_all(),
             'running': self._running
         }
