@@ -45,11 +45,13 @@ class ApiRegionalCDRClient:
         if self.parsed_key.is_smart_key:
             logger.info(
                 f"Using smart API key - Tier: {self.parsed_key.tier}, "
-                f"Customer: {self.parsed_key.customer_id}, "
+                f"Customer: {self.parsed_key.customer_id or 'encrypted'}, "
                 f"Rate limit: {self.parsed_key.rate_limit}/min"
             )
         else:
             logger.info(f"Using {self.parsed_key.format} API key format")
+            if not self.parsed_key.is_valid:
+                logger.warning(f"API key validation issue: {self.parsed_key.error}")
         
         self.metrics = MetricsCollector()
         self._session: Optional[aiohttp.ClientSession] = None
@@ -136,6 +138,8 @@ class ApiRegionalCDRClient:
         if not self._session:
             raise RuntimeError("Client not started. Call start() first.")
         
+        logger.debug(f"Preparing to send batch with {batch.size} records")
+        
         # Check rate limit before sending
         await self._check_rate_limit()
             
@@ -147,11 +151,14 @@ class ApiRegionalCDRClient:
             if batch.cdrs:
                 # Map CDRs to MQS format
                 records.extend([CDRMapper.to_mqs_format(cdr, self.host_info) for cdr in batch.cdrs])
+                logger.debug(f"Mapped {len(batch.cdrs)} CDRs to MQS format")
             if batch.cels:
                 # CELs use their original format for now
                 records.extend([cel.to_dict() for cel in batch.cels])
+                logger.debug(f"Added {len(batch.cels)} CELs")
             
             if records:
+                logger.info(f"Sending {len(records)} records to {self.api_base_url}/mqs/cdr/batch")
                 await self._send_batch_records(records)
                 
             # Record metrics

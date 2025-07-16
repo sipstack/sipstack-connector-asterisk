@@ -17,9 +17,7 @@ services:
             AMI_PORT: ${AMI_PORT:-5038} # AMI port (default: 5038)
             AMI_USERNAME: ${AMI_USERNAME} # AMI username
             AMI_PASSWORD: ${AMI_PASSWORD} # AMI password
-            # For API-Regional, use API_BASE_URL instead of REGION
-            API_BASE_URL: ${API_BASE_URL:-} # Direct API URL (e.g., http://localhost:3000/v1)
-            REGION: ${REGION:-us1} # API region for cloud (ca1, us1, us2)
+            REGION: ${REGION:-us1} # API region (ca1, us1, us2)
 
             # Optional Configuration
             LOG_LEVEL: ${LOG_LEVEL:-INFO} # Logging level

@@ -21,7 +21,7 @@ class ParsedApiKey:
     @property
     def is_smart_key(self) -> bool:
         """Check if this is a smart key with embedded metadata."""
-        return self.format == 'smart_v1'
+        return self.format == 'smart'
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -39,8 +39,12 @@ class ParsedApiKey:
 class SmartKeyParser:
     """Parser for smart API keys with embedded metadata."""
     
-    # Smart key pattern: sk_t{tier}_c{custnum}_{random}
-    SMART_KEY_PATTERN = re.compile(r'^sk_t([0-4])_c(\d+)_([a-zA-Z0-9]{20,})$')
+    # Smart key patterns
+    # New format: sk_t{tier}_{encrypted_customer_id}_{token}
+    SMART_KEY_PATTERN = re.compile(r'^sk_t([0-4])_([a-fA-F0-9]{32})_([a-fA-F0-9]{64})$')
+    
+    # Old format: sk_t{tier}_c{custnum}_{random}
+    OLD_SMART_KEY_PATTERN = re.compile(r'^sk_t([0-4])_c(\d+)_([a-zA-Z0-9]{20,})$')
     
     # Legacy key pattern: sk_{random}
     LEGACY_KEY_PATTERN = re.compile(r'^sk_[a-zA-Z0-9]{20,}$')
@@ -72,8 +76,24 @@ class SmartKeyParser:
                 error='Empty API key'
             )
         
-        # Try smart key format
+        # Try new smart key format (with encrypted customer ID)
         match = cls.SMART_KEY_PATTERN.match(api_key)
+        if match:
+            tier = int(match.group(1))
+            encrypted_customer_id = match.group(2)
+            limits = cls.TIER_LIMITS[tier]
+            
+            return ParsedApiKey(
+                is_valid=True,
+                format='smart',
+                tier=tier,
+                customer_id=None,  # Not available in encrypted format
+                rate_limit=limits['rate_limit'],
+                queue_delay=limits['queue_delay']
+            )
+        
+        # Try old smart key format (with plain customer ID)
+        match = cls.OLD_SMART_KEY_PATTERN.match(api_key)
         if match:
             tier = int(match.group(1))
             customer_id = int(match.group(2))
@@ -81,7 +101,7 @@ class SmartKeyParser:
             
             return ParsedApiKey(
                 is_valid=True,
-                format='smart_v1',
+                format='smart',
                 tier=tier,
                 customer_id=customer_id,
                 rate_limit=limits['rate_limit'],

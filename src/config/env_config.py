@@ -17,12 +17,9 @@ def load_config_from_env() -> Dict[str, Any]:
     if missing_vars:
         raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
     
-    # Get API base URL - support both old region format and new direct URL
-    api_base_url = os.getenv('API_BASE_URL')
-    if not api_base_url:
-        # Fallback to region-based URL for backward compatibility
-        region = os.getenv('REGION', 'us1')
-        api_base_url = f"https://api-{region}.sipstack.com/v1"
+    # Get region and construct API URL
+    region = os.getenv('REGION', 'us1')
+    api_base_url = f"https://api-{region}.sipstack.com/v1"
     
     config = {
         'ami': {
@@ -63,6 +60,7 @@ def load_config_from_env() -> Dict[str, Any]:
     
     # Log configuration (without sensitive data)
     logger.info(f"Configuration loaded from environment:")
+    logger.info(f"  Region: {region}")
     logger.info(f"  API URL: {api_base_url}")
     logger.info(f"  AMI Host: {config['ami']['host']}:{config['ami']['port']}")
     logger.info(f"  CDR Batch Size: {config['cdr']['batch_size']}")
