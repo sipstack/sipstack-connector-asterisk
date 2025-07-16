@@ -17,6 +17,7 @@ from utils.metrics import (
 )
 from .cdr_monitor import CDRMonitor
 from .http_worker import HTTPWorker
+from .direct_sender import DirectCDRSender
 
 logger = logging.getLogger(__name__)
 
@@ -63,14 +64,28 @@ class AmiConnector:
                 max_queue_size=queue_size
             )
             
-            # Create HTTP worker that consumes from queue
-            self.http_worker = HTTPWorker(
-                queue=self.cdr_queue,
-                api_client=self.api_client,
-                batch_size=self.cdr_config.get('batch_size', 100),
-                batch_timeout=self.cdr_config.get('batch_timeout', 30.0),
-                max_retries=self.cdr_config.get('max_retries', 3)
-            )
+            # Create worker based on mode
+            cdr_mode = self.cdr_config.get('mode', 'batch')
+            if cdr_mode == 'direct':
+                # Use DirectCDRSender for immediate sending without batching
+                self.http_worker = DirectCDRSender(
+                    queue=self.cdr_queue,
+                    api_client=self.api_client,
+                    max_concurrent=self.cdr_config.get('max_concurrent', 10),
+                    max_retries=self.cdr_config.get('max_retries', 3)
+                )
+                logger.info("Using direct CDR sending mode")
+            else:
+                # Use HTTPWorker for batch sending
+                self.http_worker = HTTPWorker(
+                    queue=self.cdr_queue,
+                    api_client=self.api_client,
+                    batch_size=self.cdr_config.get('batch_size', 100),
+                    batch_timeout=self.cdr_config.get('batch_timeout', 30.0),
+                    batch_force_timeout=self.cdr_config.get('batch_force_timeout', 5.0),
+                    max_retries=self.cdr_config.get('max_retries', 3)
+                )
+                logger.info("Using batch CDR sending mode")
         
     async def connect(self) -> bool:
         try:

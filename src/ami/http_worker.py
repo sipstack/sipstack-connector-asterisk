@@ -19,6 +19,7 @@ class HTTPWorker:
                  api_client,
                  batch_size: int = 100,
                  batch_timeout: float = 30.0,
+                 batch_force_timeout: float = 5.0,
                  max_retries: int = 3):
         """
         Initialize HTTP worker.
@@ -34,6 +35,7 @@ class HTTPWorker:
         self.api_client = api_client
         self.batch_size = batch_size
         self.batch_timeout = batch_timeout
+        self.batch_force_timeout = batch_force_timeout
         self.max_retries = max_retries
         
         self.metrics = MetricsCollector()
@@ -41,6 +43,7 @@ class HTTPWorker:
         self._worker_task = None
         self._current_batch = CDRBatch()
         self._batch_timer = None
+        self._force_timer = None
         
     async def start(self):
         """Start the HTTP worker."""
@@ -50,17 +53,21 @@ class HTTPWorker:
             
         self._running = True
         self._worker_task = asyncio.create_task(self._worker_loop())
+        # Start force flush timer
+        self._force_timer = asyncio.create_task(self._force_flush_timer())
         update_http_worker_status(True)
-        logger.info("HTTP worker started")
+        logger.info(f"HTTP worker started (force flush every {self.batch_force_timeout}s)")
         
     async def stop(self):
         """Stop the HTTP worker and flush pending batch."""
         logger.info("Stopping HTTP worker...")
         self._running = False
         
-        # Cancel batch timer
+        # Cancel timers
         if self._batch_timer:
             self._batch_timer.cancel()
+        if self._force_timer:
+            self._force_timer.cancel()
             
         # Flush current batch
         if self._current_batch.size > 0:
@@ -77,6 +84,25 @@ class HTTPWorker:
         update_http_worker_status(False)        
         logger.info("HTTP worker stopped")
         
+    async def _force_flush_timer(self):
+        """Force flush timer that runs independently to prevent blocking."""
+        logger.info(f"Force flush timer started (interval: {self.batch_force_timeout}s)")
+        
+        while self._running:
+            try:
+                await asyncio.sleep(self.batch_force_timeout)
+                
+                if self._current_batch.size > 0:
+                    logger.info(f"Force flushing batch with {self._current_batch.size} records")
+                    await self._flush_batch()
+                    
+            except asyncio.CancelledError:
+                logger.info("Force flush timer cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in force flush timer: {e}", exc_info=True)
+                await asyncio.sleep(1)  # Brief pause on errors
+        
     async def _worker_loop(self):
         """Main worker loop that processes items from queue."""
         logger.info("HTTP worker loop started")
@@ -84,7 +110,7 @@ class HTTPWorker:
         while self._running:
             try:
                 # Wait for item with timeout to check batch timeout
-                timeout = 1.0  # Check every second
+                timeout = 0.1  # Check every 100ms for better responsiveness
                 
                 try:
                     item = await asyncio.wait_for(
@@ -112,6 +138,8 @@ class HTTPWorker:
                 except asyncio.TimeoutError:
                     # Check if we need to flush due to timeout
                     await self._check_timeout()
+                    # Always yield on timeout to prevent blocking
+                    await asyncio.sleep(0)
                     
             except asyncio.CancelledError:
                 logger.info("Worker loop cancelled")

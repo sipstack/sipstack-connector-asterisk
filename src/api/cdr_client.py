@@ -7,6 +7,7 @@ import json
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 import backoff
+import asyncio
 
 from models.cdr import CDRBatch
 from utils.metrics import MetricsCollector
@@ -140,17 +141,25 @@ class ApiRegionalCDRClient:
         max_tries=3,
         max_time=60
     )
-    async def send_batch(self, batch: CDRBatch):
+    async def send_batch(self, batch):
         """
         Send a batch of CDR/CEL records to API-Regional service.
         
         Args:
-            batch: CDRBatch containing records to send
+            batch: CDRBatch or dict containing records to send
         """
         if not self._session:
             raise RuntimeError("Client not started. Call start() first.")
         
-        logger.debug(f"Preparing to send batch with {batch.size} records")
+        # Handle dict format for direct sending
+        if isinstance(batch, dict):
+            cdrs = batch.get('cdrs', [])
+            cels = batch.get('cels', [])
+            batch_size = len(cdrs) + len(cels)
+            logger.debug(f"Preparing to send {batch_size} records from dict")
+        else:
+            batch_size = batch.size
+            logger.debug(f"Preparing to send batch with {batch_size} records")
         
         # Check rate limit before sending
         await self._check_rate_limit()
@@ -160,17 +169,31 @@ class ApiRegionalCDRClient:
         try:
             # Combine CDRs and CELs into a single batch request
             records = []
-            if batch.cdrs:
-                # Map CDRs to MQS format
-                records.extend([CDRMapper.to_mqs_format(cdr, self.host_info) for cdr in batch.cdrs])
-                logger.debug(f"Mapped {len(batch.cdrs)} CDRs to MQS format")
-            if batch.cels:
-                # CELs use their original format for now
-                records.extend([cel.to_dict() for cel in batch.cels])
-                logger.debug(f"Added {len(batch.cels)} CELs")
+            
+            # Handle dict format
+            if isinstance(batch, dict):
+                cdrs = batch.get('cdrs', [])
+                cels = batch.get('cels', [])
+                if cdrs:
+                    # Already in dict format, just map to MQS
+                    records.extend([CDRMapper.to_mqs_format(cdr, self.host_info) for cdr in cdrs])
+                    logger.debug(f"Mapped {len(cdrs)} CDRs to MQS format")
+                if cels:
+                    records.extend(cels)
+                    logger.debug(f"Added {len(cels)} CELs")
+            else:
+                # Original CDRBatch format
+                if batch.cdrs:
+                    # Map CDRs to MQS format
+                    records.extend([CDRMapper.to_mqs_format(cdr, self.host_info) for cdr in batch.cdrs])
+                    logger.debug(f"Mapped {len(batch.cdrs)} CDRs to MQS format")
+                if batch.cels:
+                    # CELs use their original format for now
+                    records.extend([cel.to_dict() for cel in batch.cels])
+                    logger.debug(f"Added {len(batch.cels)} CELs")
             
             if records:
-                logger.info(f"Sending {len(records)} records to {self.api_base_url}/v1/mqs/cdr/batch")
+                logger.info(f"Sending {len(records)} records to {self.api_base_url}/mqs/cdr/batch")
                 await self._send_batch_records(records)
                 
             # Record metrics
@@ -196,7 +219,7 @@ class ApiRegionalCDRClient:
         if not self._session:
             raise RuntimeError("Client not started. Call start() first.")
             
-        url = f"{self.api_base_url}/v1/mqs/cdr/batch"
+        url = f"{self.api_base_url}/mqs/cdr/batch"
         
         headers = self._get_headers()
         logger.debug(f"Request URL: {url}")
@@ -211,12 +234,22 @@ class ApiRegionalCDRClient:
         try:
             logger.debug("Making POST request to API...")
             
+            # Add shorter timeout for this specific request
+            timeout = aiohttp.ClientTimeout(total=10.0)  # 10 second timeout
+            
+            # Yield control before making request
+            await asyncio.sleep(0)
+            
             async with self._session.post(
                 url,
                 headers=headers,
-                json=records
+                json=records,
+                timeout=timeout
             ) as response:
                 logger.debug(f"Response received - status: {response.status}")
+                
+                # Yield control after receiving response
+                await asyncio.sleep(0)
                 
                 if response.status == 202:
                     # Handle accepted response
@@ -253,7 +286,7 @@ class ApiRegionalCDRClient:
         Args:
             cdr: CDR dictionary
         """
-        url = f"{self.api_base_url}/v1/mqs/cdr"
+        url = f"{self.api_base_url}/mqs/cdr"
         
         headers = self._get_headers()
         
