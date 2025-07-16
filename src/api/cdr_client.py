@@ -184,29 +184,42 @@ class ApiRegionalCDRClient:
         url = f"{self.api_base_url}/mqs/cdr/batch"
         
         headers = self._get_headers()
+        logger.debug(f"Request URL: {url}")
+        logger.debug(f"Request headers: {headers}")
+        logger.debug(f"Number of records: {len(records)}")
         
-        async with self._session.post(
-            url,
-            headers=headers,
-            json=records
-        ) as response:
-            if response.status == 202:
-                # Handle accepted response
-                result = await response.json()
-                job_ids = result.get('job_ids', [])
-                queued_count = result.get('queued_count', 0)
-                logger.info(f"Batch accepted: {queued_count} records queued, job IDs: {job_ids}")
-                self.metrics.increment('records_queued', queued_count)
-            elif response.status in (200, 201, 204):
-                # Success
-                logger.info(f"Batch sent successfully: {len(records)} records")
-                self.metrics.increment('records_sent', len(records))
-            else:
-                error_text = await response.text()
-                raise Exception(f"API error {response.status}: {error_text}")
+        try:
+            async with self._session.post(
+                url,
+                headers=headers,
+                json=records
+            ) as response:
+                logger.debug(f"Response status: {response.status}")
                 
-            self.metrics.increment('cdr_inserted', len(records))
-            logger.debug(f"Sent {len(records)} CDR records")
+                if response.status == 202:
+                    # Handle accepted response
+                    result = await response.json()
+                    job_ids = result.get('job_ids', [])
+                    queued_count = result.get('queued_count', 0)
+                    logger.info(f"Batch accepted: {queued_count} records queued, job IDs: {job_ids}")
+                    self.metrics.increment('records_queued', queued_count)
+                elif response.status in (200, 201, 204):
+                    # Success
+                    logger.info(f"Batch sent successfully: {len(records)} records")
+                    self.metrics.increment('records_sent', len(records))
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"API error {response.status}: {error_text}")
+                    
+                self.metrics.increment('cdr_inserted', len(records))
+                logger.debug(f"Sent {len(records)} CDR records")
+                
+        except aiohttp.ClientError as e:
+            logger.error(f"HTTP client error sending batch: {e}", exc_info=True)
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error sending batch: {e}", exc_info=True)
+            raise
             
     async def send_cdr(self, cdr: Dict[str, Any]):
         """

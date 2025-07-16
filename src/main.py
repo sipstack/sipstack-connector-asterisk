@@ -85,6 +85,11 @@ async def main():
         # Start API clients
         await api_client.start()
         
+        # Test connectivity
+        logger.info("Testing API connectivity...")
+        connectivity = await api_client.test_connectivity()
+        logger.info(f"API connectivity test results: {connectivity}")
+        
         # Initialize AMI connector
         ami_connector = AmiConnector(
             host=config['ami']['host'],

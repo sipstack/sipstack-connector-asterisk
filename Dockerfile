@@ -23,7 +23,9 @@ FROM python:3.8-slim
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-ca-certificates
 
 # Create non-root user
 RUN useradd -r -s /bin/false -m -d /app sipstack
