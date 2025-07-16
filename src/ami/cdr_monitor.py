@@ -96,10 +96,13 @@ class CDRMonitor:
             
     async def _check_batch(self):
         """Check if batch should be sent."""
+        logger.debug(f"Checking batch: size={self.batch.size}, threshold={self.batch_size}")
         if self.batch.size >= self.batch_size:
+            logger.info(f"Batch size {self.batch.size} reached threshold {self.batch_size}, flushing")
             await self._flush_batch()
         elif not self._batch_timer:
             # Start batch timer
+            logger.debug(f"Starting batch timer for {self.batch_timeout} seconds")
             self._batch_timer = asyncio.create_task(self._batch_timeout())
             
     async def _batch_timeout(self):

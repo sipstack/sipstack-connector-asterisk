@@ -12,6 +12,7 @@ from models.cdr import CDRBatch
 from utils.metrics import MetricsCollector
 from .smart_key_parser import SmartKeyParser, ParsedApiKey
 from .cdr_mapper import CDRMapper
+from __version__ import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,8 @@ class ApiRegionalCDRClient:
         """Get request headers."""
         headers = {
             'Content-Type': 'application/json',
-            'Authorization': f'Bearer {self.api_key}'
+            'Authorization': f'Bearer {self.api_key}',
+            'User-Agent': f'SIPSTACK-Connector-Asterisk/{__version__} (Python/aiohttp)'
         }
         
         return headers
@@ -187,14 +189,25 @@ class ApiRegionalCDRClient:
         logger.debug(f"Request URL: {url}")
         logger.debug(f"Request headers: {headers}")
         logger.debug(f"Number of records: {len(records)}")
+        if records and len(records) > 0:
+            logger.debug(f"Sample record: {json.dumps(records[0], default=str)[:500]}")
+            # Check payload size
+            payload_size = len(json.dumps(records, default=str))
+            logger.debug(f"Total payload size: {payload_size} bytes ({payload_size/1024:.1f} KB)")
         
         try:
+            logger.debug("Making POST request to API...")
+            timeout = aiohttp.ClientTimeout(total=10, connect=5, sock_read=5)
+            logger.debug(f"Using timeout: {timeout}")
+            
+            logger.debug("About to call session.post...")
             async with self._session.post(
                 url,
                 headers=headers,
-                json=records
+                json=records,
+                timeout=timeout
             ) as response:
-                logger.debug(f"Response status: {response.status}")
+                logger.debug(f"Response received - status: {response.status}")
                 
                 if response.status == 202:
                     # Handle accepted response
@@ -216,6 +229,9 @@ class ApiRegionalCDRClient:
                 
         except aiohttp.ClientError as e:
             logger.error(f"HTTP client error sending batch: {e}", exc_info=True)
+            raise
+        except asyncio.TimeoutError as e:
+            logger.error(f"Timeout error sending batch after 10 seconds: {e}", exc_info=True)
             raise
         except Exception as e:
             logger.error(f"Unexpected error sending batch: {e}", exc_info=True)
