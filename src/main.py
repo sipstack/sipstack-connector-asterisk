@@ -97,9 +97,10 @@ async def main():
             cdr_config=config.get('cdr', {})
         )
         
-        # Setup signal handlers
+        # Setup signal handlers for graceful shutdown
+        loop = asyncio.get_event_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
-            signal.signal(sig, lambda s, f: asyncio.create_task(shutdown()))
+            loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown()))
         
         # Connect to AMI
         connected = await ami_connector.connect()

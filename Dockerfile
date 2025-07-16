@@ -58,5 +58,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Expose metrics port
 EXPOSE 8000
 
-# Run the application as a module
-CMD ["python", "-m", "main"]
+# Run the application with unbuffered output and proper signal handling
+CMD ["python", "-u", "-m", "main"]
