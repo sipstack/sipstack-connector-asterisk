@@ -179,7 +179,7 @@ class HTTPWorker:
                 start_time = datetime.now()
                 
                 # Send batch
-                await self.api_client.send_batch(batch)
+                await self.api_client.send_cdr_batch(batch)
                 
                 # Record metrics
                 duration = (datetime.now() - start_time).total_seconds()
