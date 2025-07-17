@@ -6,7 +6,7 @@ A lightweight Docker container that monitors Asterisk CDR events via AMI and sen
 
 ### 1. Prerequisites
 - Docker installed
-- Asterisk 16+ with AMI enabled
+- Asterisk 16+ with AMI enabled (Asterisk 13+ for LinkedID support)
 - SIPSTACK API key
 
 ### 2. Configure Asterisk
@@ -32,13 +32,18 @@ read = system,call,log,verbose,agent,user,dtmf,reporting,cdr,dialplan
 write = system,call,agent,user,command,reporting,originate
 ```
 
-#### 2.2 Enable CDR Manager
+#### 2.2 Enable CDR Manager with LinkedID Support
 
 Edit `/etc/asterisk/cdr_manager.conf`:
 
 ```ini
 [general]
 enabled = yes
+
+; LinkedID and Sequence support for call flow tracking
+[mappings]
+linkedid => LinkedID
+sequence => Sequence
 ```
 
 #### 2.3 Reload Configuration
@@ -196,7 +201,7 @@ docker logs -f sipstack-connector
 - 🔄 **Real-time CDR Monitoring** - Streams CDR events as they happen
 - 🔐 **Standard Key Authentication** - Secure API access with server-managed features
 - 📦 **Flexible Processing Modes** - Choose between batch or direct sending
-- 🔗 **LinkedID Support** - Complete call flow tracking and reconstruction
+- 🔗 **LinkedID & Sequence Support** - Complete call flow tracking with proper event ordering
 - 🎯 **Minimal CDR Filtering** - Keep maximum data for analytics
 - 🌍 **Multi-region Support** - Choose from ca1, us1, us2 regions
 - 📊 **Prometheus Metrics** - Built-in monitoring on port 8000
@@ -562,29 +567,55 @@ This ensures you don't lose legitimate calls that went through your IVR or queue
 
 ### Example: Call Flow Reconstruction with LinkedID
 
-With minimal filtering and `linkedid`, you can now reconstruct complete call flows:
+With minimal filtering, `linkedid`, and `sequence`, you can reconstruct complete call flows with proper event ordering:
+
+**LinkedID**: Groups all CDRs belonging to the same call together
+**Sequence**: Provides the exact order of events within the call
 
 **Example Call Journey (linkedid: asterisk-1234567890.1):**
 ```
-1. CDR: src='+1234567890' dst='s' (IVR entry)
-2. CDR: src='s' dst='100' (Queue attempt)  
-3. CDR: src='100' dst='101' (Agent 1 - no answer)
-4. CDR: src='100' dst='102' (Agent 2 - answered)
+Sequence | Source       | Destination | Disposition  | Duration | Description
+---------|--------------|-------------|--------------|----------|-------------
+3790912  | +1234567890  | s          | ANSWERED     | 5        | IVR entry
+3790913  | s            | 100        | NO ANSWER    | 0        | Queue attempt
+3790914  | 100          | 101        | NO ANSWER    | 10       | Agent 1 ring
+3790915  | 100          | 102        | ANSWERED     | 120      | Agent 2 answered
 ```
 
-**Analytics Query Example:**
+**Analytics Query Examples:**
 ```sql
--- Find primary CDR for each call
+-- Find primary (final) CDR for each call
 SELECT * FROM call_detail_records 
 WHERE linkedid = 'asterisk-1234567890.1'
 ORDER BY sequence DESC 
 LIMIT 1;
 
--- Get complete call flow
-SELECT * FROM call_detail_records
+-- Get complete call flow in chronological order
+SELECT 
+  sequence,
+  src AS source,
+  dst AS destination,
+  disposition,
+  duration,
+  billsec,
+  lastapp,
+  started_at
+FROM call_detail_records
 WHERE linkedid = 'asterisk-1234567890.1'
 ORDER BY sequence ASC;
+
+-- Analyze queue performance
+SELECT 
+  linkedid,
+  COUNT(*) as queue_attempts,
+  MAX(CASE WHEN disposition = 'ANSWERED' THEN 1 ELSE 0 END) as answered,
+  SUM(CASE WHEN dst LIKE '1__' AND disposition = 'NO ANSWER' THEN duration ELSE 0 END) as total_ring_time
+FROM call_detail_records
+WHERE lastapp = 'Queue'
+GROUP BY linkedid;
 ```
+
+**Important**: The `sequence` field is an incrementing counter from Asterisk that ensures proper ordering even when multiple CDRs have the same timestamp.
 
 ### Advanced Filtering Options
 

@@ -90,6 +90,12 @@ class CDR:
     @classmethod
     def from_ami_event(cls, event: Dict[str, Any]) -> 'CDR':
         """Create CDR from AMI Cdr event."""
+        # Log the entire event for debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Raw AMI CDR event: {event}")
+        logger.info(f"AMI CDR event fields: {list(event.keys())}")
+        
         # Parse the start time
         start_time = datetime.fromisoformat(event.get('StartTime', ''))
         
@@ -99,6 +105,26 @@ class CDR:
             call_type = 'inbound'
         elif event.get('Destination', '').startswith('+') or len(event.get('Destination', '')) > 6:
             call_type = 'outbound'
+        
+        # Check for linkedid in various possible field names
+        # Also check for malformed field names with extra spaces/characters
+        linkedid = None
+        sequence_val = None
+        
+        # Look for LinkedID and Sequence fields even if they have extra characters
+        for key in event.keys():
+            if 'LinkedID' in key:
+                linkedid = event.get(key)
+                logger.info(f"Found LinkedID in field '{key}' with value: {linkedid}")
+            elif 'Sequence' in key and 'Sequence' != key:  # Avoid the normal field
+                sequence_val = event.get(key)
+                logger.info(f"Found Sequence in field '{key}' with value: {sequence_val}")
+        
+        # Fallback to normal field names if not found
+        if not linkedid:
+            linkedid = event.get('LinkedID') or event.get('linkedid')
+        if not sequence_val:
+            sequence_val = event.get('Sequence')
         
         return cls(
             calldate=start_time,
@@ -117,8 +143,8 @@ class CDR:
             uniqueid=event.get('UniqueID', ''),
             accountcode=event.get('AccountCode'),
             userfield=event.get('UserField'),
-            sequence=int(event.get('Sequence')) if event.get('Sequence') else None,
-            linkedid=event.get('LinkedID'),
+            sequence=int(sequence_val) if sequence_val else None,
+            linkedid=linkedid,
             peeraccount=event.get('PeerAccount'),
             call_type=call_type
         )
