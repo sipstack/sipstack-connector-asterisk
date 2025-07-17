@@ -50,17 +50,27 @@ class UnifiedApiClient:
             
     async def upload_recording(self, file_path: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Legacy method - recordings are not processed in CDR-only mode.
+        Upload recording to API-Regional service.
         
         Args:
             file_path: Path to recording file
             metadata: Recording metadata
             
         Returns:
-            Empty dict
+            Response from API
         """
-        logger.debug("Recording upload called in CDR-only mode, ignoring")
-        return {}
+        if not self.cdr_client:
+            logger.warning("CDR client not configured, skipping recording upload")
+            return {}
+            
+        # Determine recording type from metadata
+        recording_type = metadata.get('recording_type', 'call')
+        if recording_type == 'queue' or metadata.get('queue'):
+            endpoint = 'queue-recording'
+        else:
+            endpoint = 'recording'
+            
+        return await self.cdr_client.upload_recording(file_path, metadata, endpoint)
         
     async def send_cdr_batch(self, batch: CDRBatch):
         """

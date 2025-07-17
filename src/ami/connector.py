@@ -18,6 +18,7 @@ from utils.metrics import (
 from .cdr_monitor import CDRMonitor
 from .http_worker import HTTPWorker
 from .direct_sender import DirectCDRSender
+from .recording_watcher import RecordingWatcher
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,11 @@ class AmiConnector:
         self.cdr_monitor = None
         self.http_worker = None
         self.cdr_queue = None
+        
+        # Initialize recording watcher if enabled
+        self.recording_watcher = None
+        if self.recording_config.get('watcher_enabled', False):
+            self.recording_watcher = RecordingWatcher(api_client, recording_config)
         
         if self.cdr_config.get('enabled', False):
             # Create async queue for CDR/CEL records
@@ -123,6 +129,11 @@ class AmiConnector:
             if self.http_worker:
                 await self.http_worker.start()
                 logger.info("HTTP worker started for CDR batch processing")
+                
+            # Start recording watcher if enabled
+            if self.recording_watcher:
+                await self.recording_watcher.start()
+                logger.info("Recording file watcher started")
             
             # Update metrics with connection status
             record_ami_connection_status(True)
@@ -156,6 +167,11 @@ class AmiConnector:
             if self.http_worker:
                 await self.http_worker.stop()
                 logger.info("HTTP worker stopped")
+                
+            # Stop recording watcher if running
+            if self.recording_watcher:
+                await self.recording_watcher.stop()
+                logger.info("Recording file watcher stopped")
             
             self.ami_client.close()
             self.connected = False

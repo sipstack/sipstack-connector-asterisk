@@ -4,6 +4,7 @@ import asyncio
 import aiohttp
 import logging
 import json
+import os
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 import backoff
@@ -42,11 +43,13 @@ class ApiRegionalCDRClient:
         self.max_retries = max_retries
         self.host_info = host_info  # Store host information for CDR mapping
         
-        # Parse API key for embedded metadata
+        # Parse API key for format validation
         self.parsed_key = SmartKeyParser.parse(api_key)
-        if self.parsed_key.is_smart_key:
+        if self.parsed_key.is_standard_key:
+            logger.info("Using standard API key format")
+        elif self.parsed_key.is_smart_key:
             logger.info(
-                f"Using smart API key - Tier: {self.parsed_key.tier}, "
+                f"Using legacy smart API key - Tier: {self.parsed_key.tier}, "
                 f"Customer: {self.parsed_key.customer_id or 'encrypted'}, "
                 f"Rate limit: {self.parsed_key.rate_limit}/min"
             )
@@ -58,7 +61,7 @@ class ApiRegionalCDRClient:
         self.metrics = MetricsCollector()
         self._session: Optional[aiohttp.ClientSession] = None
         
-        # Rate limiting based on tier
+        # Rate limiting for legacy smart keys only
         self._last_request_time = 0
         self._request_count = 0
         self._rate_window_start = datetime.now()
@@ -107,9 +110,14 @@ class ApiRegionalCDRClient:
         return headers
     
     async def _check_rate_limit(self):
-        """Check and enforce rate limits based on embedded tier."""
+        """Check and enforce rate limits for legacy smart keys only."""
+        # Skip rate limiting for standard keys (handled server-side)
+        if self.parsed_key.is_standard_key:
+            return
+            
+        # Also skip for other non-smart key formats
         if not self.parsed_key.is_smart_key or not self.parsed_key.rate_limit:
-            return  # No rate limiting for legacy keys
+            return
             
         now = datetime.now()
         window_duration = (now - self._rate_window_start).total_seconds()
@@ -342,6 +350,105 @@ class ApiRegionalCDRClient:
         except Exception as e:
             logger.error(f"Connection test failed: {e}", exc_info=True)
             return False
+            
+    async def upload_recording(self, file_path: str, metadata: Dict[str, Any], endpoint: str = 'recording') -> Dict[str, Any]:
+        """
+        Upload a recording file to API-Regional service.
+        
+        Args:
+            file_path: Path to the recording file
+            metadata: Recording metadata
+            endpoint: API endpoint ('recording' or 'queue-recording')
+            
+        Returns:
+            API response data
+        """
+        if not self._session:
+            raise RuntimeError("Client not started. Call start() first.")
+            
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Recording file not found: {file_path}")
+            
+        # Check rate limit before sending
+        await self._check_rate_limit()
+        
+        url = f"{self.api_base_url}/mqs/{endpoint}"
+        logger.info(f"Uploading recording to {url}: {file_path}")
+        
+        try:
+            # Prepare multipart form data
+            data = aiohttp.FormData()
+            
+            # Add the audio file
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+                filename = os.path.basename(file_path)
+                data.add_field('file', file_content, filename=filename, content_type='audio/wav')
+                
+            # Add metadata fields
+            # Convert metadata to match API expectations
+            if 'caller_id_num' in metadata:
+                data.add_field('src_number', str(metadata.get('caller_id_num', '')))
+            if 'connected_line_num' in metadata:
+                data.add_field('dst_number', str(metadata.get('connected_line_num', '')))
+            if 'direction' in metadata:
+                data.add_field('direction', str(metadata.get('direction', 'inbound')))
+            if 'uniqueid' in metadata:
+                data.add_field('call_id', str(metadata.get('uniqueid', '')))
+            if 'duration' in metadata:
+                data.add_field('duration', str(metadata.get('duration', '0')))
+            if 'queue' in metadata:
+                data.add_field('queue_name', str(metadata.get('queue', '')))
+            if 'timestamp' in metadata:
+                data.add_field('start_time', str(metadata.get('timestamp', '')))
+                
+            # Add customer ID from parsed API key if available (legacy smart keys only)
+            if self.parsed_key.is_smart_key and self.parsed_key.customer_id:
+                data.add_field('customer_id', self.parsed_key.customer_id)
+                
+            # Add any additional metadata as JSON
+            extra_metadata = {
+                k: v for k, v in metadata.items() 
+                if k not in ['caller_id_num', 'connected_line_num', 'direction', 
+                             'uniqueid', 'duration', 'queue', 'timestamp']
+            }
+            if extra_metadata:
+                data.add_field('metadata', json.dumps(extra_metadata))
+            
+            # Prepare headers (remove Content-Type as it will be set by FormData)
+            headers = {
+                'Authorization': f'Bearer {self.api_key}'
+            }
+            
+            # Upload with longer timeout for file uploads
+            timeout = aiohttp.ClientTimeout(total=60.0)
+            
+            async with self._session.post(
+                url,
+                data=data,
+                headers=headers,
+                timeout=timeout
+            ) as response:
+                response_data = await response.json()
+                
+                if response.status == 202:
+                    # Accepted - recording queued for processing
+                    logger.info(f"Recording queued for processing: {response_data}")
+                    self.metrics.increment('recordings_uploaded')
+                    return response_data
+                elif response.status in (200, 201):
+                    # Success
+                    logger.info(f"Recording uploaded successfully: {response_data}")
+                    self.metrics.increment('recordings_uploaded')
+                    return response_data
+                else:
+                    error_msg = response_data.get('error', 'Unknown error')
+                    raise Exception(f"API error {response.status}: {error_msg}")
+                        
+        except Exception as e:
+            self.metrics.increment('recording_upload_errors')
+            logger.error(f"Error uploading recording {file_path}: {e}", exc_info=True)
+            raise
             
     def get_stats(self) -> Dict[str, Any]:
         """Get client statistics."""

@@ -12,7 +12,7 @@ services:
 
         environment:
             # Required Configuration
-            API_KEY: ${API_KEY} # Your SIPSTACK API key (sk_t{tier}_{customer}_{token})
+            API_KEY: ${API_KEY} # Your SIPSTACK API key (sk_{32 random characters})
             AMI_HOST: ${AMI_HOST} # Asterisk server hostname/IP
             AMI_PORT: ${AMI_PORT:-5038} # AMI port (default: 5038)
             AMI_USERNAME: ${AMI_USERNAME} # AMI username
@@ -27,7 +27,22 @@ services:
             # Monitoring
             MONITORING_ENABLED: ${MONITORING_ENABLED:-true}
             MONITORING_PORT: ${MONITORING_PORT:-8000}
+            
+            # Recording Watcher Configuration
+            RECORDING_WATCHER_ENABLED: ${RECORDING_WATCHER_ENABLED:-false}
+            RECORDING_WATCH_PATHS: ${RECORDING_WATCH_PATHS:-/var/spool/asterisk/monitor}
+            RECORDING_FILE_EXTENSIONS: ${RECORDING_FILE_EXTENSIONS:-.wav,.mp3,.gsm}
+            RECORDING_MIN_FILE_SIZE: ${RECORDING_MIN_FILE_SIZE:-1024}
+            RECORDING_PROCESS_EXISTING: ${RECORDING_PROCESS_EXISTING:-false}
+            RECORDING_DELETE_AFTER_UPLOAD: ${RECORDING_DELETE_AFTER_UPLOAD:-false}
 
+        # Volume bindings for Asterisk recordings
+        volumes:
+            # Mount Asterisk spool directory for recording access
+            - /var/spool/asterisk:/var/spool/asterisk:ro
+            # Optional: specific monitor directory only
+            # - /var/spool/asterisk/monitor:/var/spool/asterisk/monitor:ro
+        
         # Note: Using host networking - metrics available on host port 8000
         
         # Health check

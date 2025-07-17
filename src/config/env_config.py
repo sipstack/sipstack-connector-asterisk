@@ -64,7 +64,20 @@ def load_config_from_env() -> Dict[str, Any]:
         },
         'recordings': {
             'enabled': os.getenv('RECORDINGS_ENABLED', 'false').lower() == 'true',
-            'paths': os.getenv('RECORDING_PATHS', '/var/spool/asterisk/recording').split(',')
+            'paths': os.getenv('RECORDING_PATHS', '/var/spool/asterisk/recording').split(','),
+            'watcher_enabled': os.getenv('RECORDING_WATCHER_ENABLED', 'false').lower() == 'true',
+            'watch_paths': os.getenv('RECORDING_WATCH_PATHS', '/var/spool/asterisk/monitor').split(','),
+            'file_extensions': os.getenv('RECORDING_FILE_EXTENSIONS', '.wav,.mp3,.gsm').split(','),
+            'min_file_size': int(os.getenv('RECORDING_MIN_FILE_SIZE', '1024')),  # 1KB minimum
+            'stabilization_time': float(os.getenv('RECORDING_STABILIZATION_TIME', '2.0')),
+            'process_existing': os.getenv('RECORDING_PROCESS_EXISTING', 'false').lower() == 'true',
+            'delete_after_upload': os.getenv('RECORDING_DELETE_AFTER_UPLOAD', 'false').lower() == 'true',
+            'filter': {
+                'include_patterns': os.getenv('RECORDING_INCLUDE_PATTERNS', '').split(',') if os.getenv('RECORDING_INCLUDE_PATTERNS') else [],
+                'exclude_patterns': os.getenv('RECORDING_EXCLUDE_PATTERNS', '').split(',') if os.getenv('RECORDING_EXCLUDE_PATTERNS') else [],
+                'min_duration': int(os.getenv('RECORDING_MIN_DURATION', '0')),
+                'max_age_hours': int(os.getenv('RECORDING_MAX_AGE_HOURS', '24'))
+            }
         },
         'voicemail': {
             'enabled': os.getenv('VOICEMAIL_ENABLED', 'false').lower() == 'true',

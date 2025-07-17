@@ -119,11 +119,11 @@ nano .env  # Edit with your values
 Edit `.env` with your settings:
 ```env
 # Required
-API_KEY=sk_t2_xxxxx_xxxxx          # Your SIPSTACK API key
-AMI_HOST=localhost                 # Use localhost with --network host
-AMI_USERNAME=manager-sipstack      # Must match section name in manager.conf
-AMI_PASSWORD=your_secure_password  # AMI password
-REGION=us1                         # API region (ca1, us1, us2)
+API_KEY=sk_1234567890abcdef1234567890abcdef  # Your SIPSTACK API key (standard format)
+AMI_HOST=localhost                             # Use localhost with --network host
+AMI_USERNAME=manager-sipstack                  # Must match section name in manager.conf
+AMI_PASSWORD=your_secure_password              # AMI password
+REGION=us1                                     # API region (ca1, us1, us2)
 ```
 
 **Step 3:** Deploy
@@ -144,7 +144,7 @@ docker-compose ps
 ```bash
 # Create .env file
 cat > .env << 'EOF'
-API_KEY=sk_t2_xxxxx_xxxxx
+API_KEY=sk_1234567890abcdef1234567890abcdef
 AMI_HOST=localhost
 AMI_USERNAME=manager-sipstack
 AMI_PASSWORD=your_secure_password
@@ -169,7 +169,7 @@ docker run -d \
   --name sipstack-connector \
   --restart unless-stopped \
   --network host \
-  -e API_KEY="sk_t2_xxxxx_xxxxx" \
+  -e API_KEY="sk_1234567890abcdef1234567890abcdef" \
   -e AMI_HOST="localhost" \
   -e AMI_USERNAME="manager-sipstack" \
   -e AMI_PASSWORD="your_secure_password" \
@@ -194,12 +194,67 @@ docker logs -f sipstack-connector
 
 - 🚀 **Easy Deployment** - Single Docker container, no installation required
 - 🔄 **Real-time CDR Monitoring** - Streams CDR events as they happen
-- 🔐 **Smart Key Authentication** - Secure tier-based API access
+- 🔐 **Standard Key Authentication** - Secure API access with server-managed features
 - 📦 **Flexible Processing Modes** - Choose between batch or direct sending
 - 🎯 **Smart CDR Filtering** - Reduce storage by 80-90% by filtering noise
 - 🌍 **Multi-region Support** - Choose from ca1, us1, us2 regions
 - 📊 **Prometheus Metrics** - Built-in monitoring on port 8000
 - 🔧 **Zero Dependencies** - No Python or system packages needed on host
+
+## Recording Support
+
+The connector can automatically monitor and upload call recordings from your Asterisk system. When enabled, it watches specified directories for new recording files and uploads them to SIPSTACK for transcription and analysis.
+
+### Enabling Recording Upload
+
+**1. Update your `.env` file:**
+```env
+# Enable recording watcher
+RECORDING_WATCHER_ENABLED=true
+RECORDING_WATCH_PATHS=/var/spool/asterisk/monitor
+RECORDING_FILE_EXTENSIONS=.wav,.mp3,.gsm
+RECORDING_DELETE_AFTER_UPLOAD=false
+```
+
+**2. Update `docker-compose.yml` to mount the recording directory:**
+```yaml
+services:
+  sipstack-connector:
+    # ... existing configuration ...
+    volumes:
+      # Mount Asterisk spool directory for recording access
+      - /var/spool/asterisk:/var/spool/asterisk:ro
+```
+
+**3. Restart the connector:**
+```bash
+docker-compose down
+docker-compose up -d
+```
+
+The connector will now:
+- Monitor the specified directories for new recordings
+- Wait for files to finish writing before processing
+- Upload recordings to SIPSTACK with metadata
+- Optionally delete files after successful upload
+
+### Recording Filters
+
+You can filter which recordings to process:
+
+```env
+# Only process files matching these patterns
+RECORDING_INCLUDE_PATTERNS=queue-,out-
+
+# Exclude files matching these patterns  
+RECORDING_EXCLUDE_PATTERNS=test,temp
+
+# Only process recordings at least 5 seconds long
+RECORDING_MIN_DURATION=5
+
+# Only process recordings from the last 12 hours
+RECORDING_MAX_AGE_HOURS=12
+```
 
 ## Configuration
 
@@ -209,7 +264,7 @@ docker logs -f sipstack-connector
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| API_KEY | Yes | - | SIPSTACK API key (sk_t{tier}_{customer}_{token}) |
+| API_KEY | Yes | - | SIPSTACK API key (sk_1234567890abcdef1234567890abcdef) |
 | AMI_HOST | Yes | - | Asterisk server hostname/IP |
 | AMI_USERNAME | Yes | - | AMI username |
 | AMI_PASSWORD | Yes | - | AMI password |
@@ -244,6 +299,27 @@ docker logs -f sipstack-connector
 |----------|----------|---------|-------------|
 | MONITORING_ENABLED | No | true | Enable Prometheus metrics |
 | MONITORING_PORT | No | 8000 | Metrics port |
+
+#### Recording Watcher
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| RECORDING_WATCHER_ENABLED | No | false | Enable monitoring of recording directories |
+| RECORDING_WATCH_PATHS | No | /var/spool/asterisk/monitor | Comma-separated list of directories to watch |
+| RECORDING_FILE_EXTENSIONS | No | .wav,.mp3,.gsm | Comma-separated list of file extensions to process |
+| RECORDING_MIN_FILE_SIZE | No | 1024 | Minimum file size in bytes (filters empty files) |
+| RECORDING_STABILIZATION_TIME | No | 2.0 | Time to wait for file to finish writing (seconds) |
+| RECORDING_PROCESS_EXISTING | No | false | Process existing files on startup |
+| RECORDING_DELETE_AFTER_UPLOAD | No | false | Delete recording files after successful upload |
+
+#### Recording Filters
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| RECORDING_INCLUDE_PATTERNS | No | - | Comma-separated patterns that must be in filename |
+| RECORDING_EXCLUDE_PATTERNS | No | - | Comma-separated patterns to exclude from processing |
+| RECORDING_MIN_DURATION | No | 0 | Minimum recording duration in seconds |
+| RECORDING_MAX_AGE_HOURS | No | 24 | Maximum age of recordings to process (hours) |
 
 ## Monitoring
 
@@ -391,8 +467,9 @@ asterisk -rx "manager show settings"
 - Ensure Docker uses `--network host` for localhost access
 
 **API authentication failed**
-- Verify API key format: `sk_t{tier}_{customer}_{token}`
-- Check region setting matches your API key
+- Verify API key format: `sk_1234567890abcdef1234567890abcdef` (35 chars total)
+- Check region setting matches your account
+- Ensure API key is active and not expired
 
 ## Advanced Usage
 

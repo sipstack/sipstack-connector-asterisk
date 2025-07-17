@@ -15,6 +15,9 @@ prometheus-client>=0.11.0
 python-dotenv>=0.19.0
 backoff>=2.0.0  # For retry logic
 
+# File watching requirements
+watchdog>=2.1.0  # For monitoring recording directories
+
 # Python 3.6 users must also install:
 # dataclasses>=0.6
 

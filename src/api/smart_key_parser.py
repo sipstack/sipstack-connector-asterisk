@@ -1,4 +1,4 @@
-"""Smart API key parser for extracting embedded metadata."""
+"""API key parser for standard and legacy key formats."""
 
 import re
 from typing import Optional, Dict, Any
@@ -11,7 +11,7 @@ from utils.compat import dataclass
 class ParsedApiKey:
     """Parsed API key with extracted metadata."""
     is_valid: bool
-    format: str  # 'smart_v1', 'legacy', or 'invalid'
+    format: str  # 'standard', 'smart', 'legacy', or 'invalid'
     tier: Optional[int] = None
     customer_id: Optional[int] = None
     rate_limit: Optional[int] = None
@@ -22,6 +22,11 @@ class ParsedApiKey:
     def is_smart_key(self) -> bool:
         """Check if this is a smart key with embedded metadata."""
         return self.format == 'smart'
+    
+    @property
+    def is_standard_key(self) -> bool:
+        """Check if this is a standard key format."""
+        return self.format == 'standard'
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -37,9 +42,12 @@ class ParsedApiKey:
 
 
 class SmartKeyParser:
-    """Parser for smart API keys with embedded metadata."""
+    """Parser for API keys including standard and legacy formats."""
     
-    # Smart key patterns
+    # Standard key pattern: sk_[32 alphanumeric characters]
+    STANDARD_KEY_PATTERN = re.compile(r'^sk_[a-zA-Z0-9]{32}$')
+    
+    # Smart key patterns (legacy embedded tier keys)
     # New format: sk_t{tier}_{encrypted_customer_id}_{token}
     SMART_KEY_PATTERN = re.compile(r'^sk_t([0-4])_([a-fA-F0-9]{32})_([a-fA-F0-9]{64})$')
     
@@ -49,7 +57,7 @@ class SmartKeyParser:
     # Legacy key pattern: sk_{random}
     LEGACY_KEY_PATTERN = re.compile(r'^sk_[a-zA-Z0-9]{20,}$')
     
-    # Tier limits
+    # Tier limits (for legacy smart keys only)
     TIER_LIMITS = {
         0: {'rate_limit': 10, 'queue_delay': 60},    # Free
         1: {'rate_limit': 60, 'queue_delay': 20},    # Starter
@@ -74,6 +82,18 @@ class SmartKeyParser:
                 is_valid=False,
                 format='invalid',
                 error='Empty API key'
+            )
+        
+        # Try standard key format first (sk_[32 chars])
+        if cls.STANDARD_KEY_PATTERN.match(api_key):
+            return ParsedApiKey(
+                is_valid=True,
+                format='standard',
+                # No embedded metadata in standard keys - all managed server-side
+                tier=None,
+                customer_id=None,
+                rate_limit=None,
+                queue_delay=None
             )
         
         # Try new smart key format (with encrypted customer ID)
