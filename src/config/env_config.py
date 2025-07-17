@@ -2,6 +2,7 @@
 Environment-based configuration for Docker deployment
 """
 import os
+import socket
 import logging
 from typing import Dict, Any
 
@@ -21,7 +22,23 @@ def load_config_from_env() -> Dict[str, Any]:
     region = os.getenv('REGION', 'us1')
     api_base_url = f"https://api-{region}.sipstack.com/v1"
     
+    # Get hostname - try environment variable first, then fall back to system hostname
+    hostname = os.getenv('HOST_HOSTNAME', '').strip()
+    if not hostname:
+        try:
+            # Try to get the actual system hostname
+            hostname = socket.gethostname()
+            # If we're in a container, this might return the container ID
+            # Try to read from /etc/hostname if it exists
+            if os.path.exists('/etc/hostname'):
+                with open('/etc/hostname', 'r') as f:
+                    hostname = f.read().strip()
+        except Exception as e:
+            logger.warning(f"Failed to get hostname: {e}")
+            hostname = 'unknown'
+    
     config = {
+        'hostname': hostname,  # Host that's running this connector
         'ami': {
             'host': os.getenv('AMI_HOST'),
             'port': int(os.getenv('AMI_PORT', '5038')),
@@ -45,12 +62,12 @@ def load_config_from_env() -> Dict[str, Any]:
             'max_concurrent': int(os.getenv('CDR_MAX_CONCURRENT', '10')),  # For direct mode
             # Filtering options
             'filter': {
-                'enabled': os.getenv('CDR_FILTER_ENABLED', 'false').lower() == 'true',
-                'queue_attempts': os.getenv('CDR_FILTER_QUEUE_ATTEMPTS', 'true').lower() == 'true',
-                'zero_duration': os.getenv('CDR_FILTER_ZERO_DURATION', 'true').lower() == 'true',
+                'enabled': os.getenv('CDR_FILTER_ENABLED', 'true').lower() == 'true',
+                'queue_attempts': os.getenv('CDR_FILTER_QUEUE_ATTEMPTS', 'false').lower() == 'true',
+                'zero_duration': os.getenv('CDR_FILTER_ZERO_DURATION', 'false').lower() == 'true',
                 'internal_only': os.getenv('CDR_FILTER_INTERNAL_ONLY', 'false').lower() == 'true',
                 'min_duration': int(os.getenv('CDR_FILTER_MIN_DURATION', '0')),  # Minimum duration in seconds
-                'exclude_destinations': os.getenv('CDR_FILTER_EXCLUDE_DST', 's,h').split(','),  # Comma-separated list
+                'exclude_destinations': [d.strip() for d in os.getenv('CDR_FILTER_EXCLUDE_DST', 'h').split(',') if d.strip()],  # Comma-separated list
             }
         },
         'logging': {
@@ -87,6 +104,7 @@ def load_config_from_env() -> Dict[str, Any]:
     
     # Log configuration (without sensitive data)
     logger.info(f"Configuration loaded from environment:")
+    logger.info(f"  Hostname: {hostname}")
     logger.info(f"  Region: {region}")
     logger.info(f"  API URL: {api_base_url}")
     logger.info(f"  AMI Host: {config['ami']['host']}:{config['ami']['port']}")

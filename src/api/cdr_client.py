@@ -105,6 +105,11 @@ class ApiRegionalCDRClient:
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {self.api_key}'
         }
+        
+        # Add hostname header if available
+        if self.host_info and self.host_info.get('hostname'):
+            headers['X-Asterisk-Hostname'] = self.host_info['hostname']
+        
         # User-Agent is already set in session headers
         
         return headers

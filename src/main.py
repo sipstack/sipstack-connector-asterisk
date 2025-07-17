@@ -73,7 +73,7 @@ async def main():
             # Get host information for CDR metadata
             import socket
             host_info = {
-                'hostname': socket.gethostname(),
+                'hostname': config.get('hostname', socket.gethostname()),
                 'region': config.get('region', 'us-east'),
                 'customer_id': config.get('customer_id', ''),
             }

@@ -37,6 +37,8 @@ class CDRMonitor:
         # Log filter configuration
         if self.filter_config.get('enabled', False):
             logger.info(f"CDR filtering enabled with config: {self.filter_config}")
+            exclude_dests = self.filter_config.get('exclude_destinations', [])
+            logger.info(f"Excluding destinations: {exclude_dests} (type: {type(exclude_dests)}, items: {[repr(d) for d in exclude_dests]})")
         
     async def start(self):
         """Start the CDR monitor."""
@@ -129,9 +131,22 @@ class CDRMonitor:
         Returns:
             True if the CDR should be filtered (not processed), False otherwise
         """
-        # Filter queue attempts (dst='s' with NO ANSWER)
+        # Filter excluded destinations - but keep answered calls or calls with duration
+        exclude_destinations = self.filter_config.get('exclude_destinations', [])
+        if exclude_destinations and cdr.dst in exclude_destinations:
+            # Keep the call if it was answered or has meaningful duration
+            if cdr.disposition == 'ANSWERED' or cdr.duration > 0 or cdr.billsec > 0:
+                logger.debug(f"Keeping CDR with excluded destination due to ANSWERED/duration: dst='{cdr.dst}', "
+                           f"disposition={cdr.disposition}, duration={cdr.duration}, billsec={cdr.billsec}")
+            else:
+                logger.debug(f"Filtering CDR with excluded destination: dst='{cdr.dst}', "
+                           f"disposition={cdr.disposition}, duration={cdr.duration}")
+                return True
+        
+        # Filter queue attempts (dst='s' with NO ANSWER) - kept for backward compatibility
+        # This is now redundant with the above logic but kept for clarity
         if self.filter_config.get('queue_attempts', True):
-            if cdr.dst in self.filter_config.get('exclude_destinations', ['s', 'h']) and cdr.disposition == 'NO ANSWER':
+            if cdr.dst in ['s', 'h'] and cdr.disposition == 'NO ANSWER' and cdr.duration == 0:
                 return True
         
         # Filter zero duration calls (except BUSY/FAILED)

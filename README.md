@@ -196,7 +196,8 @@ docker logs -f sipstack-connector
 - 🔄 **Real-time CDR Monitoring** - Streams CDR events as they happen
 - 🔐 **Standard Key Authentication** - Secure API access with server-managed features
 - 📦 **Flexible Processing Modes** - Choose between batch or direct sending
-- 🎯 **Smart CDR Filtering** - Reduce storage by 80-90% by filtering noise
+- 🔗 **LinkedID Support** - Complete call flow tracking and reconstruction
+- 🎯 **Minimal CDR Filtering** - Keep maximum data for analytics
 - 🌍 **Multi-region Support** - Choose from ca1, us1, us2 regions
 - 📊 **Prometheus Metrics** - Built-in monitoring on port 8000
 - 🔧 **Zero Dependencies** - No Python or system packages needed on host
@@ -282,16 +283,22 @@ RECORDING_MAX_AGE_HOURS=12
 | CDR_BATCH_FORCE_TIMEOUT | No | 5 | Force flush interval to prevent blocking |
 | CDR_MAX_CONCURRENT | No | 10 | Max concurrent API requests (direct mode) |
 
-#### CDR Filtering (Optional - Reduces Storage by ~80-90%)
+#### CDR Filtering (Minimal Filtering for Maximum Analytics)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| CDR_FILTER_ENABLED | No | false | Enable CDR filtering |
-| CDR_FILTER_QUEUE_ATTEMPTS | No | true | Filter failed queue attempts (dst='s' with NO ANSWER) |
-| CDR_FILTER_ZERO_DURATION | No | true | Filter zero duration calls (except BUSY/FAILED) |
+| CDR_FILTER_ENABLED | No | true | Enable CDR filtering |
+| CDR_FILTER_QUEUE_ATTEMPTS | No | false | Filter failed queue attempts (keep for analytics) |
+| CDR_FILTER_ZERO_DURATION | No | false | Filter zero duration calls (keep for analytics) |
 | CDR_FILTER_INTERNAL_ONLY | No | false | Only keep internal extension calls |
 | CDR_FILTER_MIN_DURATION | No | 0 | Minimum call duration in seconds |
-| CDR_FILTER_EXCLUDE_DST | No | s,h | Comma-separated destinations to exclude |
+| CDR_FILTER_EXCLUDE_DST | No | h | Only exclude hangup handlers |
+
+**New Default Strategy**: With `linkedid` support, we now keep almost all CDRs for complete call flow analytics. The only excluded destination is 'h' (hangup handlers) which provides no analytical value. All queue attempts, zero-duration calls, and 's' destinations are preserved to enable:
+- Queue performance analytics
+- Call abandonment tracking  
+- Complete call journey reconstruction
+- Transfer success rates
 
 #### Monitoring
 
@@ -515,46 +522,69 @@ docker-compose -p server2 -f docker-compose-server2.yml up -d
 
 ## CDR Filtering
 
-The connector includes smart CDR filtering to reduce storage requirements by 80-90% while preserving meaningful call data.
+The connector now uses minimal CDR filtering to maximize analytics value while leveraging `linkedid` for call flow reconstruction.
 
-### Why Filter CDRs?
+### New Filtering Philosophy
 
-Analysis of typical Asterisk CDR data shows that the majority of records are noise:
-- **Queue distribution attempts**: ~85% of CDRs are failed queue attempts with destination 's'
-- **Zero-duration calls**: Internal routing that never connected
-- **System destinations**: Calls to 'h' (hangup) and other system contexts
+With `linkedid` support in the database, we've shifted from aggressive filtering to minimal filtering:
+- **Previous approach**: Filter 80-90% of CDRs to save storage
+- **New approach**: Keep nearly all CDRs for complete analytics
 
-These records provide little value for analytics but consume significant storage.
+### What We Filter
+
+Only truly useless records are filtered:
+- **Hangup handlers** (`dst='h'`): Provide no analytical value
+- Everything else is kept for analytics, including:
+  - Queue attempts (`dst='s'`) - for queue analytics
+  - Zero-duration calls - for routing analysis
+  - Failed attempts - for performance metrics
 
 ### Filter Configuration
 
 Enable filtering by setting `CDR_FILTER_ENABLED=true` in your `.env` file.
 
 **Default filter rules (when enabled):**
-- ✅ Filters queue distribution attempts (`dst='s'` with `NO ANSWER`)
+- ✅ Filters failed queue attempts (`dst='s'` with `NO ANSWER` and `duration=0`)
 - ✅ Filters zero-duration calls (except `BUSY`/`FAILED`/`CONGESTION`)
-- ✅ Excludes system destinations (`s`, `h`)
-- ❌ Keeps all answered calls
-- ❌ Keeps all failed/busy calls
-- ❌ Keeps calls with duration > 0
+- ✅ **Smart destination filtering**: Excludes `s` and `h` ONLY if not answered and no duration
+- ❌ Keeps ALL answered calls (including those with `dst='s'`)
+- ❌ Keeps ALL calls with duration > 0 (even if `dst='s'`)
+- ❌ Keeps all failed/busy calls with duration
 
-### Example: Before and After Filtering
+### Smart 's' Destination Handling
 
-**Before filtering (100 CDRs):**
+The filter intelligently handles queue/IVR destinations:
+- `dst='s', disposition='NO ANSWER', duration=0` → **Filtered** (failed queue attempt)
+- `dst='s', disposition='ANSWERED', duration=45` → **Kept** (successful queue/IVR call)
+- `dst='s', disposition='BUSY', duration=3` → **Kept** (meaningful interaction)
+
+This ensures you don't lose legitimate calls that went through your IVR or queue system.
+
+### Example: Call Flow Reconstruction with LinkedID
+
+With minimal filtering and `linkedid`, you can now reconstruct complete call flows:
+
+**Example Call Journey (linkedid: asterisk-1234567890.1):**
 ```
-85 queue attempts (dst='s', NO ANSWER, duration=0)
-5 zero-duration internal calls
-7 actual customer calls (ANSWERED)
-3 failed customer calls (BUSY/FAILED)
+1. CDR: src='+1234567890' dst='s' (IVR entry)
+2. CDR: src='s' dst='100' (Queue attempt)  
+3. CDR: src='100' dst='101' (Agent 1 - no answer)
+4. CDR: src='100' dst='102' (Agent 2 - answered)
 ```
 
-**After filtering (10 CDRs):**
-```
-7 actual customer calls (ANSWERED)
-3 failed customer calls (BUSY/FAILED)
-```
+**Analytics Query Example:**
+```sql
+-- Find primary CDR for each call
+SELECT * FROM call_detail_records 
+WHERE linkedid = 'asterisk-1234567890.1'
+ORDER BY sequence DESC 
+LIMIT 1;
 
-**Result**: 90% storage reduction, 100% meaningful data retained.
+-- Get complete call flow
+SELECT * FROM call_detail_records
+WHERE linkedid = 'asterisk-1234567890.1'
+ORDER BY sequence ASC;
+```
 
 ### Advanced Filtering Options
 
