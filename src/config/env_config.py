@@ -54,7 +54,7 @@ def load_config_from_env() -> Dict[str, Any]:
         'cdr': {
             'enabled': os.getenv('CDR_ENABLED', 'true').lower() == 'true',
             'mode': os.getenv('CDR_MODE', 'batch'),  # 'batch' or 'direct'
-            'batch_size': int(os.getenv('CDR_BATCH_SIZE', '100')),
+            'batch_size': int(os.getenv('CDR_BATCH_SIZE', '200')),
             'batch_timeout': int(os.getenv('CDR_BATCH_TIMEOUT', '30')),
             'batch_force_timeout': int(os.getenv('CDR_BATCH_FORCE_TIMEOUT', '5')),  # Force flush interval
             'queue_size': int(os.getenv('CDR_QUEUE_SIZE', '10000')),
@@ -84,7 +84,8 @@ def load_config_from_env() -> Dict[str, Any]:
             'paths': os.getenv('RECORDING_PATHS', '/var/spool/asterisk/recording').split(','),
             'watcher_enabled': os.getenv('RECORDING_WATCHER_ENABLED', 'false').lower() == 'true',
             'watch_paths': os.getenv('RECORDING_WATCH_PATHS', '/var/spool/asterisk/monitor').split(','),
-            'file_extensions': os.getenv('RECORDING_FILE_EXTENSIONS', '.wav,.mp3,.gsm').split(','),
+            'file_extensions': [f'.{ext.strip()}' if not ext.strip().startswith('.') else ext.strip() 
+                                for ext in os.getenv('RECORDING_FILE_EXTENSIONS', 'wav,mp3,gsm').split(',')],
             'min_file_size': int(os.getenv('RECORDING_MIN_FILE_SIZE', '1024')),  # 1KB minimum
             'stabilization_time': float(os.getenv('RECORDING_STABILIZATION_TIME', '2.0')),
             'process_existing': os.getenv('RECORDING_PROCESS_EXISTING', 'false').lower() == 'true',

@@ -57,7 +57,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # Default environment variables (can be overridden)
 ENV LOG_LEVEL=INFO
 ENV API_TIMEOUT=30
-ENV BATCH_SIZE=100
+ENV BATCH_SIZE=200
 ENV BATCH_TIMEOUT=30
 
 # Switch to non-root user

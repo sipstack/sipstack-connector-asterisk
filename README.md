@@ -223,6 +223,7 @@ docker logs -f sipstack-connector
 - 📊 **Prometheus Metrics** - Built-in monitoring on port 8000
 - 🔧 **Zero Dependencies** - No Python or system packages needed on host
 - 🔓 **Simple Permission Handling** - Just set PUID/PGID to match your asterisk user
+- ⚡ **Optimized Defaults** - Batch size 200, timeout 30s, 1GB memory for production
 
 ## Recording Support
 
@@ -245,7 +246,7 @@ PGID=1001
 # Enable recording watcher
 RECORDING_WATCHER_ENABLED=true
 RECORDING_WATCH_PATHS=/var/spool/asterisk/monitor
-RECORDING_FILE_EXTENSIONS=.wav,.mp3,.gsm
+RECORDING_FILE_EXTENSIONS=wav,mp3,gsm
 RECORDING_DELETE_AFTER_UPLOAD=false
 ```
 
@@ -272,6 +273,57 @@ The connector runs as the user specified by PUID/PGID to match your asterisk use
 - **Docker Run** requires `--user UID:GID` flag
 
 Simply set these two values and the connector will run with the correct permissions!
+
+### Recording File Naming
+
+For optimal recording-to-CDR linking, the connector automatically extracts metadata from your recording filenames. While the connector is flexible and will process any recording file, following these naming conventions ensures the best integration:
+
+#### Recommended Naming Pattern
+
+Include the Asterisk **UniqueID** in your recording filename. The UniqueID is the primary key that links recordings to CDRs.
+
+**UniqueID Format**: `{timestamp}.{sequence}` (e.g., `1702391234.12345`)
+
+**Example Recording Filenames**:
+- `1702391234.12345.wav` - Simple UniqueID format
+- `out-555-1234-555-5678-1702391234.12345.wav` - With caller/callee info
+- `queue-sales-1702391234.12345.wav` - Queue recording
+- `20231212-143015-1702391234.12345.wav` - With human-readable timestamp
+
+#### What the Connector Extracts
+
+1. **UniqueID** (Primary) - Extracted using pattern `\d{10,}\.\d+`
+   - This becomes the `call_id` field for joining with CDRs
+   - Essential for linking recordings to their corresponding CDR
+
+2. **Direction** - From prefixes like `in-`, `out-`, `inbound-`, `outbound-`
+
+3. **Queue Name** - From `queue-{name}-` prefix or `/queues/{name}/` in path
+
+4. **Timestamp** - From patterns like `YYYYMMDD-HHMMSS` or `YYYY-MM-DD-HH-MM-SS`
+
+#### Asterisk Configuration Example
+
+To include the UniqueID in your recordings, use Asterisk's `${UNIQUEID}` variable:
+
+```asterisk
+; In extensions.conf
+exten => s,n,MixMonitor(/var/spool/asterisk/monitor/${STRFTIME(${EPOCH},,%Y%m%d-%H%M%S)}-${CALLERID(num)}-${EXTEN}-${UNIQUEID}.wav)
+
+; For queue recordings in queues.conf
+monitor-format = wav
+monitor-type = MixMonitor
+setinterfacevar = yes
+; Then in extensions.conf for queue member recordings:
+exten => _X.,n,Set(MONITOR_FILENAME=queue-${QUEUENAME}-${UNIQUEID})
+```
+
+#### Fallback Behavior
+
+If no UniqueID is found in the filename, the connector will:
+- Use the filename itself as the `recording_id`
+- Still upload the recording successfully
+- You can manually link recordings to CDRs later using other metadata
 
 ### Recording Filters
 
@@ -314,7 +366,7 @@ RECORDING_MAX_AGE_HOURS=12
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | CDR_MODE | No | batch | Processing mode: 'batch' or 'direct' |
-| CDR_BATCH_SIZE | No | 100 | Maximum CDRs per batch (batch mode) |
+| CDR_BATCH_SIZE | No | 200 | Maximum CDRs per batch (batch mode) |
 | CDR_BATCH_TIMEOUT | No | 30 | Seconds before sending partial batch |
 | CDR_BATCH_FORCE_TIMEOUT | No | 5 | Force flush interval to prevent blocking |
 | CDR_MAX_CONCURRENT | No | 10 | Max concurrent API requests (direct mode) |
@@ -533,7 +585,7 @@ networks:
 ```
 
 ### Resource Limits
-Adjust in `docker-compose.yml`:
+Default resource limits in `docker-compose.yml`:
 
 ```yaml
 deploy:
@@ -541,7 +593,12 @@ deploy:
     limits:
       cpus: '1.0'
       memory: 1G
+    reservations:
+      cpus: '0.2'
+      memory: 256M
 ```
+
+These defaults are optimized for production workloads. Adjust based on your call volume.
 
 ### Multiple Instances
 Monitor multiple Asterisk servers:

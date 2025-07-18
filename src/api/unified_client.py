@@ -63,12 +63,8 @@ class UnifiedApiClient:
             logger.warning("CDR client not configured, skipping recording upload")
             return {}
             
-        # Determine recording type from metadata
-        recording_type = metadata.get('recording_type', 'call')
-        if recording_type == 'queue' or metadata.get('queue'):
-            endpoint = 'queue-recording'
-        else:
-            endpoint = 'recording'
+        # All recordings go to the same endpoint
+        endpoint = 'recording'
             
         return await self.cdr_client.upload_recording(file_path, metadata, endpoint)
         

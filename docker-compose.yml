@@ -25,7 +25,7 @@ services:
 
             # Optional Configuration
             LOG_LEVEL: ${LOG_LEVEL:-INFO} # Logging level
-            BATCH_SIZE: ${BATCH_SIZE:-100} # CDR batch size
+            BATCH_SIZE: ${BATCH_SIZE:-200} # CDR batch size
             BATCH_TIMEOUT: ${BATCH_TIMEOUT:-30} # Batch timeout in seconds
 
             # Monitoring
@@ -67,11 +67,11 @@ services:
         deploy:
             resources:
                 limits:
-                    cpus: "0.5"
-                    memory: 512M
+                    cpus: "1.0"
+                    memory: 1G
                 reservations:
-                    cpus: "0.1"
-                    memory: 128M
+                    cpus: "0.2"
+                    memory: 256M
 # Optional: External network if Asterisk is in Docker
 # networks:
 #   default:

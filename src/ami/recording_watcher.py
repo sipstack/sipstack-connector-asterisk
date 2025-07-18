@@ -17,16 +17,28 @@ class RecordingEventHandler(FileSystemEventHandler):
         
     def on_created(self, event):
         if not event.is_directory and self._is_recording_file(event.src_path):
-            asyncio.create_task(self.recording_watcher._handle_new_recording(event.src_path))
+            # Schedule the async task in the main event loop
+            loop = self.recording_watcher.loop
+            if loop and not loop.is_closed():
+                asyncio.run_coroutine_threadsafe(
+                    self.recording_watcher._handle_new_recording(event.src_path), 
+                    loop
+                )
             
     def on_modified(self, event):
         # Handle modified events for files that might still be writing
         if not event.is_directory and self._is_recording_file(event.src_path):
-            asyncio.create_task(self.recording_watcher._handle_new_recording(event.src_path))
+            # Schedule the async task in the main event loop
+            loop = self.recording_watcher.loop
+            if loop and not loop.is_closed():
+                asyncio.run_coroutine_threadsafe(
+                    self.recording_watcher._handle_new_recording(event.src_path), 
+                    loop
+                )
             
     def _is_recording_file(self, file_path: str) -> bool:
-        """Check if file matches recording patterns"""
-        return file_path.endswith(('.wav', '.mp3', '.gsm', '.ulaw', '.alaw'))
+        """Check if file matches recording patterns from configuration"""
+        return any(file_path.lower().endswith(ext.lower()) for ext in self.recording_watcher.file_extensions)
 
 class RecordingWatcher:
     """Watches for new recording files and processes them"""
@@ -42,6 +54,7 @@ class RecordingWatcher:
         self.processing_files = set()
         self.observer = None
         self.event_handler = RecordingEventHandler(self)
+        self.loop = None  # Will be set when start() is called
         
         # Filtering options
         self.filter_config = recording_config.get('filter', {})
@@ -53,6 +66,9 @@ class RecordingWatcher:
     async def start(self):
         """Start watching for recording files"""
         logger.info("Starting recording file watcher")
+        
+        # Store the current event loop for thread-safe callbacks
+        self.loop = asyncio.get_event_loop()
         
         # Create observer
         self.observer = Observer()
@@ -153,8 +169,8 @@ class RecordingWatcher:
                 
     def _should_process_file(self, file_path: str) -> bool:
         """Check if file should be processed based on filters"""
-        # Check file extension
-        if not any(file_path.endswith(ext) for ext in self.file_extensions):
+        # Check file extension (case-insensitive)
+        if not any(file_path.lower().endswith(ext.lower()) for ext in self.file_extensions):
             return False
             
         # Check file exists and size
@@ -194,68 +210,284 @@ class RecordingWatcher:
             'file_path': file_path,
             'file_name': os.path.basename(file_path),
             'file_size': os.path.getsize(file_path),
-            'recording_type': 'monitor',
             'timestamp': datetime.now().isoformat(),
             'source': 'file_watcher'
         }
-        
-        # Try to extract additional info from filename
-        # Common formats: 
-        # - monitor/20240116-123456-1234567890.12345.wav
-        # - monitor/queue-sales-20240116-123456-1234567890.12345.wav
-        # - monitor/out-1234-20240116-123456-1234567890.12345.wav
-        # - monitor/1234567890.12345.wav (simple format)
         
         filename = os.path.basename(file_path)
         # Remove extension
         name_without_ext = os.path.splitext(filename)[0]
         
-        # Try to extract UniqueID using regex
+        # PRIMARY METHOD: Extract Asterisk UniqueID
+        # This is the most reliable way to link recordings to CDRs
         import re
         # Pattern for Asterisk UniqueID: digits.digits (e.g., 1234567890.12345)
         uniqueid_pattern = r'(\d{10,}\.\d+)'
         match = re.search(uniqueid_pattern, name_without_ext)
         if match:
             metadata['uniqueid'] = match.group(1)
+            metadata['call_id'] = match.group(1)  # Also set call_id for API compatibility
             logger.debug(f"Extracted UniqueID from filename: {match.group(1)}")
         
-        # Parse filename parts
+        # SECONDARY: Try to extract any additional context from the path/filename
+        # But don't rely on specific formats since they vary
+        
+        # Check if it's in a queue directory
+        if '/queue' in file_path.lower():
+            metadata['recording_type'] = 'queue'
+            # Try to extract queue name from path
+            path_parts = file_path.split('/')
+            for i, part in enumerate(path_parts):
+                if part.lower() == 'queues' and i + 1 < len(path_parts):
+                    metadata['queue'] = path_parts[i + 1]
+                    break
+        
+        # Check common prefixes
         parts = name_without_ext.split('-')
-        
-        if len(parts) >= 3:
-            # Check for queue recording
-            if parts[0] == 'queue' and len(parts) >= 4:
+        if parts[0].lower() == 'queue':
+            metadata['recording_type'] = 'queue'
+            if len(parts) > 1:
                 metadata['queue'] = parts[1]
-                metadata['recording_type'] = 'queue'
-            # Check for outbound recording
-            elif parts[0] == 'out':
-                metadata['direction'] = 'outbound'
-                if len(parts) >= 2:
-                    metadata['extension'] = parts[1]
-            # Check for inbound recording
-            elif parts[0] == 'in':
-                metadata['direction'] = 'inbound'
-                if len(parts) >= 2:
-                    metadata['extension'] = parts[1]
+        elif parts[0].lower() in ['out', 'outbound']:
+            metadata['direction'] = 'outbound'
+        elif parts[0].lower() in ['in', 'inbound']:
+            metadata['direction'] = 'inbound'
         
-        # Try to extract timestamp from filename
-        # Pattern: YYYYMMDD-HHMMSS
-        timestamp_pattern = r'(\d{8})-(\d{6})'
+        # Try to extract a timestamp (various formats)
+        # Format 1: YYYYMMDD-HHMMSS
+        timestamp_pattern = r'(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})'
         ts_match = re.search(timestamp_pattern, name_without_ext)
         if ts_match:
             try:
-                date_str = ts_match.group(1)
-                time_str = ts_match.group(2)
-                # Parse and format timestamp
-                year = date_str[:4]
-                month = date_str[4:6]
-                day = date_str[6:8]
-                hour = time_str[:2]
-                minute = time_str[2:4]
-                second = time_str[4:6]
+                year, month, day, hour, minute, second = ts_match.groups()
                 metadata['recording_timestamp'] = f"{year}-{month}-{day}T{hour}:{minute}:{second}"
             except:
                 pass
+        
+        # Format 2: YYYY-MM-DD-HH-MM-SS
+        timestamp_pattern2 = r'(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})'
+        ts_match2 = re.search(timestamp_pattern2, name_without_ext)
+        if not ts_match and ts_match2:
+            try:
+                year, month, day, hour, minute, second = ts_match2.groups()
+                metadata['recording_timestamp'] = f"{year}-{month}-{day}T{hour}:{minute}:{second}"
+            except:
+                pass
+        
+        # Try to extract phone numbers from filename
+        # Pattern: phone-number-phone (e.g., 4164772004-0-2025-07-18...)
+        phone_pattern = r'^(\d{10,})-(\d+)-'
+        phone_match = re.match(phone_pattern, name_without_ext)
+        if phone_match:
+            metadata['caller_id_num'] = phone_match.group(1)
+            # The second number might be an extension or destination
+            if phone_match.group(2) != '0':
+                metadata['connected_line_num'] = phone_match.group(2)
+        
+        # Enhanced extraction for complex filenames - flexible parsing for different Asterisk sources
+        # Split filename into parts for analysis
+        parts = name_without_ext.split('-')
+        
+        # Extract ALL phone numbers found in the filename (10-11 digits, but not timestamps)
+        phone_numbers = []
+        phone_pattern = r'\b(\d{10,11})\b'
+        phone_matches = re.findall(phone_pattern, name_without_ext)
+        if phone_matches:
+            # Filter out numbers that are part of timestamps (unix epoch)
+            filtered_numbers = []
+            for num in phone_matches:
+                # Skip if it's likely a unix timestamp (starts with 17 or 16 for recent years)
+                if not (num.startswith('17') or num.startswith('16')):
+                    filtered_numbers.append(num)
+                # But keep it if it's exactly 11 digits (likely a phone number with country code)
+                elif len(num) == 11:
+                    filtered_numbers.append(num)
+            
+            phone_numbers = list(set(filtered_numbers))  # Remove duplicates
+            
+            # Enhanced phone number assignment with src/dst logic
+            if len(phone_numbers) >= 1:
+                # First number is typically the source (caller)
+                if 'caller_id_num' not in metadata:
+                    metadata['caller_id_num'] = phone_numbers[0]
+                    metadata['src_number'] = phone_numbers[0]  # For API consistency
+                    
+            if len(phone_numbers) >= 2:
+                # Second number is typically the destination (called)
+                if 'connected_line_num' not in metadata:
+                    metadata['connected_line_num'] = phone_numbers[1]
+                    metadata['dst_number'] = phone_numbers[1]  # For API consistency
+                    
+            # Store all found numbers for reference
+            if len(phone_numbers) > 2:
+                metadata['additional_numbers'] = phone_numbers[2:]
+                
+        # Try to extract destination number from specific patterns
+        # Pattern for direct dial: SRC-DST-timestamp (e.g., 4161234567-2125551234-20250718...)
+        direct_pattern = r'^(\d{10,})-(\d{10,})-'
+        direct_match = re.match(direct_pattern, name_without_ext)
+        if direct_match:
+            metadata['src_number'] = direct_match.group(1)
+            metadata['dst_number'] = direct_match.group(2)
+            metadata['caller_id_num'] = direct_match.group(1)
+            metadata['connected_line_num'] = direct_match.group(2)
+            
+        # Pattern for extension-to-extension: ext-SRC-ext-DST (e.g., ext-101-ext-102-...)
+        ext_pattern = r'ext-(\d{3,4})-ext-(\d{3,4})'
+        ext_match = re.search(ext_pattern, name_without_ext, re.IGNORECASE)
+        if ext_match:
+            metadata['src_extension'] = ext_match.group(1)
+            metadata['dst_extension'] = ext_match.group(2)
+            metadata['src_number'] = ext_match.group(1)
+            metadata['dst_number'] = ext_match.group(2)
+            metadata['recording_type'] = 'extension'
+            
+        # Pattern for queue recordings with agent extension: queue-NAME-CALLER-agent-EXT
+        queue_agent_pattern = r'queue-[^-]+-(\d{10,})-agent-(\d{3,4})'
+        queue_agent_match = re.search(queue_agent_pattern, name_without_ext, re.IGNORECASE)
+        if queue_agent_match:
+            metadata['src_number'] = queue_agent_match.group(1)
+            metadata['dst_number'] = queue_agent_match.group(2)
+            metadata['caller_id_num'] = queue_agent_match.group(1)
+            metadata['agent_extension'] = queue_agent_match.group(2)
+            
+        # If we have caller_id_num but no src_number, copy it
+        if 'caller_id_num' in metadata and 'src_number' not in metadata:
+            metadata['src_number'] = metadata['caller_id_num']
+            
+        # If we have connected_line_num but no dst_number, copy it
+        if 'connected_line_num' in metadata and 'dst_number' not in metadata:
+            metadata['dst_number'] = metadata['connected_line_num']
+        
+        # Look for potential tenant/company names
+        # These are non-numeric, non-date parts that could be identifiers
+        potential_tenants = []
+        for part in parts:
+            if (part and 
+                not part.isdigit() and 
+                part.lower() not in ['queue', 'out', 'in', 'outbound', 'inbound', 'ivr', 'vm', 'voicemail'] and
+                not re.match(r'^\d{4}$', part) and  # Not a year
+                not re.match(r'^\d{1,2}$', part) and  # Not month/day/hour/min/sec
+                not re.match(r'^[0-9a-f]{8,}$', part.lower()) and  # Not a hex ID
+                len(part) > 2):  # Meaningful name
+                potential_tenants.append(part)
+        
+        # If we found potential tenant names, use the most likely one
+        if potential_tenants:
+            # Prefer names that appear multiple times or near the end of filename
+            # (before the UniqueID)
+            if 'uniqueid' in metadata:
+                uid_pos = name_without_ext.find(metadata['uniqueid'])
+                if uid_pos > 0:
+                    before_uid = name_without_ext[:uid_pos].rstrip('-.')
+                    # Check which tenant name appears closest to UniqueID
+                    for tenant in reversed(potential_tenants):
+                        if tenant in before_uid:
+                            metadata['tenant_name'] = tenant
+                            break
+            else:
+                # No UniqueID, just use the first potential tenant
+                metadata['tenant_name'] = potential_tenants[0]
+        
+        # For queue recordings, try to extract queue-specific info
+        if metadata.get('recording_type') == 'queue' or 'queue' in name_without_ext.lower():
+            metadata['recording_type'] = 'queue'
+            
+            # Look for queue name after "queue-" prefix - multiple patterns
+            if 'queue' not in metadata:
+                # Pattern 1: queue-QUEUENAME-... (e.g., queue-global-gconnect-...)
+                queue_match = re.search(r'queue-([^-]+)', name_without_ext, re.IGNORECASE)
+                if queue_match:
+                    metadata['queue'] = queue_match.group(1)
+                
+                # Pattern 2: /queues/QUEUENAME/ in path (e.g., /var/spool/asterisk/monitor/queues/global-gconnect/)
+                elif '/queues/' in file_path.lower():
+                    path_parts = file_path.split('/')
+                    for i, part in enumerate(path_parts):
+                        if part.lower() == 'queues' and i + 1 < len(path_parts):
+                            queue_dir = path_parts[i + 1]
+                            # Extract queue name from directory (handle formats like "global-gconnect")
+                            if '-' in queue_dir:
+                                metadata['queue'] = queue_dir.split('-')[0]  # Take first part
+                            else:
+                                metadata['queue'] = queue_dir
+                            break
+                
+                # Pattern 3: Look for queue name in the middle of filename (e.g., ...global-gconnect-...)
+                elif not queue_match:
+                    # Try to find queue-like patterns in the filename
+                    potential_queues = []
+                    for part in parts:
+                        if (part and 
+                            not part.isdigit() and 
+                            part.lower() not in ['queue', 'gconnect', 'recording', 'monitor'] and
+                            not re.match(r'^\d{4}$', part) and  # Not a year
+                            not re.match(r'^\d{1,2}$', part) and  # Not month/day/hour
+                            len(part) > 2 and len(part) < 20):  # Reasonable queue name length
+                            potential_queues.append(part)
+                    
+                    if potential_queues:
+                        metadata['queue'] = potential_queues[0]  # Use first potential queue name
+        
+        # Extract extensions (3-4 digit numbers that aren't years)
+        extension_pattern = r'\b(\d{3,4})\b'
+        extension_matches = re.findall(extension_pattern, name_without_ext)
+        extensions = []
+        for ext in extension_matches:
+            # Filter out years and other non-extension numbers
+            if not (2000 <= int(ext) <= 2100):  # Not a year
+                extensions.append(ext)
+        
+        if extensions:
+            metadata['extensions'] = extensions
+            # If we don't have a connected_line_num, check if an extension could be it
+            if 'connected_line_num' not in metadata and len(extensions) > 0:
+                metadata['connected_line_num'] = extensions[0]
+        
+        # Extract any session/call identifiers that look like UUIDs or hex strings
+        # Pattern: 8+ char hex string (e.g., 0242036ff24c)
+        hex_pattern = r'([0-9a-f]{8,})'
+        hex_matches = re.findall(hex_pattern, name_without_ext.lower())
+        if hex_matches:
+            # Filter out phone numbers that happen to be all digits
+            session_ids = []
+            for hex_id in hex_matches:
+                if not hex_id.isdigit() or len(hex_id) not in [10, 11]:  # Not a phone number
+                    session_ids.append(hex_id)
+            if session_ids:
+                metadata['session_ids'] = session_ids
+        
+        # Extract agent/user IDs if present (common patterns)
+        # Look for patterns like agent-XXX, user-XXX, ext-XXX
+        agent_pattern = r'(?:agent|user|ext|extension)[_-]?(\w+)'
+        agent_match = re.search(agent_pattern, name_without_ext, re.IGNORECASE)
+        if agent_match:
+            metadata['agent_id'] = agent_match.group(1)
+            
+        # Fallback: Check directory path for additional context
+        # Some Asterisk setups put phone numbers or tenant info in directory names
+        dir_path = os.path.dirname(file_path)
+        dir_parts = dir_path.split('/')
+        
+        # Look for phone numbers in directory path if not found in filename
+        if 'caller_id_num' not in metadata:
+            for part in dir_parts:
+                if re.match(r'^\d{10,11}$', part):
+                    metadata['caller_id_num'] = part
+                    break
+                    
+        # Look for tenant name in directory path if not found in filename
+        if 'tenant_name' not in metadata:
+            # Common patterns: /tenants/TENANT_NAME/ or /customers/TENANT_NAME/
+            for i, part in enumerate(dir_parts):
+                if part.lower() in ['tenant', 'tenants', 'customer', 'customers', 'client', 'clients'] and i + 1 < len(dir_parts):
+                    candidate = dir_parts[i + 1]
+                    if candidate and not candidate.isdigit() and len(candidate) > 2:
+                        metadata['tenant_name'] = candidate
+                        break
+                        
+        # Store the full path info for debugging
+        metadata['recording_path'] = file_path
                     
         return metadata
         
@@ -264,6 +496,7 @@ class RecordingWatcher:
         try:
             # Submit recording to the API
             logger.info(f"Uploading recording to API: {file_path}")
+            logger.debug(f"Recording metadata: {metadata}")
             await self.api_client.upload_recording(file_path, metadata)
             logger.info(f"Successfully uploaded recording: {file_path}")
             

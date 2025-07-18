@@ -384,46 +384,133 @@ class ApiRegionalCDRClient:
             # Prepare multipart form data
             data = aiohttp.FormData()
             
-            # Add the audio file
-            with open(file_path, 'rb') as f:
-                file_content = f.read()
-                filename = os.path.basename(file_path)
-                data.add_field('file', file_content, filename=filename, content_type='audio/wav')
-                
-            # Add metadata fields
+            # Get filename for metadata
+            filename = os.path.basename(file_path)
+            
+            # Add metadata fields FIRST (before file)
             # Convert metadata to match API expectations
-            if 'caller_id_num' in metadata:
+            # REQUIRED: recording_id - use uniqueid or filename
+            recording_id = metadata.get('uniqueid', metadata.get('file_name', filename))
+            data.add_field('recording_id', str(recording_id))
+            
+            # Add all available metadata fields for the API to process
+            # Source number - prefer explicit src_number, fallback to caller_id_num
+            if 'src_number' in metadata:
+                data.add_field('src_number', str(metadata.get('src_number', '')))
+            elif 'caller_id_num' in metadata:
                 data.add_field('src_number', str(metadata.get('caller_id_num', '')))
-            if 'connected_line_num' in metadata:
+                
+            # Destination number - prefer explicit dst_number, fallback to connected_line_num
+            if 'dst_number' in metadata:
+                data.add_field('dst_number', str(metadata.get('dst_number', '')))
+            elif 'connected_line_num' in metadata:
                 data.add_field('dst_number', str(metadata.get('connected_line_num', '')))
-            if 'direction' in metadata:
-                data.add_field('direction', str(metadata.get('direction', 'inbound')))
+            
+            # Call identification
             if 'uniqueid' in metadata:
                 data.add_field('call_id', str(metadata.get('uniqueid', '')))
+                data.add_field('uniqueid', str(metadata.get('uniqueid', '')))  # Send both
+            if 'linkedid' in metadata:
+                data.add_field('linkedid', str(metadata.get('linkedid', '')))
+                
+            # Call details
+            if 'direction' in metadata:
+                data.add_field('direction', str(metadata.get('direction', 'inbound')))
             if 'duration' in metadata:
                 data.add_field('duration', str(metadata.get('duration', '0')))
             if 'queue' in metadata:
                 data.add_field('queue_name', str(metadata.get('queue', '')))
-            if 'timestamp' in metadata:
+                
+            # Timestamps
+            if 'recording_timestamp' in metadata:
+                data.add_field('start_time', str(metadata.get('recording_timestamp', '')))
+                data.add_field('calldate', str(metadata.get('recording_timestamp', '')))  # Alternative field name
+            elif 'timestamp' in metadata:
                 data.add_field('start_time', str(metadata.get('timestamp', '')))
+                
+            # Tenant information
+            if 'tenant_name' in metadata:
+                data.add_field('tenant_name', str(metadata.get('tenant_name', '')))
+            if 'tenant_id' in metadata:
+                data.add_field('tenant_id', str(metadata.get('tenant_id', '')))
+                
+            # Additional phone numbers if found
+            if 'phone_numbers' in metadata and isinstance(metadata['phone_numbers'], list):
+                for i, phone in enumerate(metadata['phone_numbers'][:3]):  # Limit to first 3
+                    data.add_field(f'phone_{i+1}', str(phone))
+                    
+            # Session/Extension information
+            if 'session_ids' in metadata and isinstance(metadata['session_ids'], list):
+                data.add_field('session_id', str(metadata['session_ids'][0]) if metadata['session_ids'] else '')
+            if 'extension' in metadata:
+                data.add_field('extension', str(metadata.get('extension', '')))
                 
             # Add customer ID from parsed API key if available (legacy smart keys only)
             if self.parsed_key.is_smart_key and self.parsed_key.customer_id:
                 data.add_field('customer_id', self.parsed_key.customer_id)
                 
+            # File details
+            data.add_field('file_name', str(metadata.get('file_name', filename)))
+            data.add_field('file_size', str(metadata.get('file_size', 0)))
+            
+            # Original file path from Asterisk
+            if 'recording_path' in metadata:
+                data.add_field('original_file_path', str(metadata.get('recording_path', '')))
+            elif 'file_path' in metadata:
+                data.add_field('original_file_path', str(metadata.get('file_path', '')))
+            
+            # Recording type
+            if 'recording_type' in metadata:
+                data.add_field('recording_type', str(metadata.get('recording_type', '')))
+                
+            # Agent/User information
+            if 'agent_id' in metadata:
+                data.add_field('agent_id', str(metadata.get('agent_id', '')))
+                
+            # Extensions found
+            if 'extensions' in metadata and isinstance(metadata['extensions'], list):
+                data.add_field('extensions', ','.join(str(e) for e in metadata['extensions']))
+                
             # Add any additional metadata as JSON
             extra_metadata = {
                 k: v for k, v in metadata.items() 
                 if k not in ['caller_id_num', 'connected_line_num', 'direction', 
-                             'uniqueid', 'duration', 'queue', 'timestamp']
+                             'uniqueid', 'duration', 'queue', 'timestamp', 'recording_timestamp',
+                             'tenant_name', 'tenant_id', 'phone_numbers', 'session_ids',
+                             'file_name', 'file_path', 'file_size', 'source', 'extensions',
+                             'recording_type', 'agent_id', 'linkedid', 'call_id']
             }
             if extra_metadata:
                 data.add_field('metadata', json.dumps(extra_metadata))
+            
+            # Log the fields being sent
+            src_num = metadata.get('src_number') or metadata.get('caller_id_num')
+            dst_num = metadata.get('dst_number') or metadata.get('connected_line_num')
+            logger.debug(f"Recording upload fields: recording_id={recording_id}, call_id={metadata.get('uniqueid')}, "
+                        f"src_number={src_num}, dst_number={dst_num}")
+            
+            # Add the audio file LAST (after all other fields)
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+                # Determine content type based on file extension
+                ext = os.path.splitext(filename)[1].lower()
+                content_type = 'audio/wav'  # default
+                if ext in ['.mp3']:
+                    content_type = 'audio/mpeg'
+                elif ext in ['.gsm']:
+                    content_type = 'audio/gsm'
+                
+                logger.debug(f"File size: {len(file_content)} bytes, content_type: {content_type}")
+                data.add_field('audio', file_content, filename=filename, content_type=content_type)
             
             # Prepare headers (remove Content-Type as it will be set by FormData)
             headers = {
                 'Authorization': f'Bearer {self.api_key}'
             }
+            
+            # Add hostname header if available
+            if self.host_info and self.host_info.get('hostname'):
+                headers['X-Asterisk-Hostname'] = self.host_info['hostname']
             
             # Upload with longer timeout for file uploads
             timeout = aiohttp.ClientTimeout(total=60.0)
@@ -434,7 +521,17 @@ class ApiRegionalCDRClient:
                 headers=headers,
                 timeout=timeout
             ) as response:
-                response_data = await response.json()
+                # Try to get JSON response, but handle non-JSON errors
+                try:
+                    response_data = await response.json()
+                except:
+                    # If response is not JSON, get text
+                    error_text = await response.text()
+                    logger.error(f"Non-JSON response (status {response.status}): {error_text}")
+                    if response.status == 400:
+                        raise Exception(f"API error 400: Bad request - {error_text}")
+                    else:
+                        raise Exception(f"API error {response.status}: {error_text}")
                 
                 if response.status == 202:
                     # Accepted - recording queued for processing
@@ -447,8 +544,13 @@ class ApiRegionalCDRClient:
                     self.metrics.increment('recordings_uploaded')
                     return response_data
                 else:
-                    error_msg = response_data.get('error', 'Unknown error')
-                    raise Exception(f"API error {response.status}: {error_msg}")
+                    error_msg = response_data.get('error', response_data.get('message', 'Unknown error'))
+                    error_details = response_data.get('details', response_data.get('code', ''))
+                    full_error = f"{error_msg}"
+                    if error_details:
+                        full_error += f" - {error_details}"
+                    logger.error(f"Recording upload failed with status {response.status}: {response_data}")
+                    raise Exception(f"API error {response.status}: {full_error}")
                         
         except Exception as e:
             self.metrics.increment('recording_upload_errors')
