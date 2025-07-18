@@ -125,6 +125,8 @@ class CDR:
             linkedid = event.get('LinkedID') or event.get('linkedid')
         if not sequence_val:
             sequence_val = event.get('Sequence')
+            if sequence_val:
+                logger.info(f"Found Sequence with value: {sequence_val}")
         
         return cls(
             calldate=start_time,

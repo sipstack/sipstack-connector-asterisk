@@ -123,6 +123,10 @@ nano .env  # Edit with your values
 
 Edit `.env` with your settings:
 ```env
+# Optional: Set to match your asterisk user (run 'id asterisk')
+PUID=1000
+PGID=1000
+
 # Required
 API_KEY=sk_1234567890abcdef1234567890abcdef  # Your SIPSTACK API key (standard format)
 AMI_HOST=localhost                             # Use localhost with --network host
@@ -143,12 +147,18 @@ docker-compose logs -f
 docker-compose ps
 ```
 
+**Note:** If you need to access recording files, set PUID/PGID in your `.env` file to match your asterisk user's UID/GID (run `id asterisk` to find these values).
+
 ## Method B: Docker Run (No Compose Required)
 
 **Option 1:** With environment file
 ```bash
 # Create .env file
 cat > .env << 'EOF'
+# Optional: Set to match your asterisk user
+PUID=1000
+PGID=1000
+
 API_KEY=sk_1234567890abcdef1234567890abcdef
 AMI_HOST=localhost
 AMI_USERNAME=manager-sipstack
@@ -156,12 +166,15 @@ AMI_PASSWORD=your_secure_password
 REGION=us1
 EOF
 
-# Run container with host networking
+# Load .env and run container with host networking
+source .env
 docker run -d \
   --name sipstack-connector \
   --restart unless-stopped \
   --network host \
+  --user ${PUID:-1000}:${PGID:-1000} \
   --env-file .env \
+  -v /var/spool/asterisk:/var/spool/asterisk:ro \
   --log-driver json-file \
   --log-opt max-size=10m \
   --log-opt max-file=3 \
@@ -170,15 +183,18 @@ docker run -d \
 
 **Option 2:** Direct environment variables
 ```bash
+# Set user to match your asterisk user (e.g., 1001:1001)
 docker run -d \
   --name sipstack-connector \
   --restart unless-stopped \
   --network host \
+  --user 1001:1001 \
   -e API_KEY="sk_1234567890abcdef1234567890abcdef" \
   -e AMI_HOST="localhost" \
   -e AMI_USERNAME="manager-sipstack" \
   -e AMI_PASSWORD="your_secure_password" \
   -e REGION="us1" \
+  -v /var/spool/asterisk:/var/spool/asterisk:ro \
   --log-driver json-file \
   --log-opt max-size=10m \
   --log-opt max-file=3 \
@@ -206,6 +222,7 @@ docker logs -f sipstack-connector
 - 🌍 **Multi-region Support** - Choose from ca1, us1, us2 regions
 - 📊 **Prometheus Metrics** - Built-in monitoring on port 8000
 - 🔧 **Zero Dependencies** - No Python or system packages needed on host
+- 🔓 **Simple Permission Handling** - Just set PUID/PGID to match your asterisk user
 
 ## Recording Support
 
@@ -213,23 +230,23 @@ The connector can automatically monitor and upload call recordings from your Ast
 
 ### Enabling Recording Upload
 
-**1. Update your `.env` file:**
+**1. Find your asterisk user's UID/GID:**
+```bash
+id asterisk
+# Example output: uid=1001(asterisk) gid=1001(asterisk)
+```
+
+**2. Update your `.env` file with the UID/GID:**
 ```env
+# Set to match your asterisk user (from step 1)
+PUID=1001
+PGID=1001
+
 # Enable recording watcher
 RECORDING_WATCHER_ENABLED=true
 RECORDING_WATCH_PATHS=/var/spool/asterisk/monitor
 RECORDING_FILE_EXTENSIONS=.wav,.mp3,.gsm
 RECORDING_DELETE_AFTER_UPLOAD=false
-```
-
-**2. Update `docker-compose.yml` to mount the recording directory:**
-```yaml
-services:
-  sipstack-connector:
-    # ... existing configuration ...
-    volumes:
-      # Mount Asterisk spool directory for recording access
-      - /var/spool/asterisk:/var/spool/asterisk:ro
 ```
 
 **3. Restart the connector:**
@@ -243,6 +260,18 @@ The connector will now:
 - Wait for files to finish writing before processing
 - Upload recordings to SIPSTACK with metadata
 - Optionally delete files after successful upload
+
+### Permission Handling
+
+The connector runs as the user specified by PUID/PGID to match your asterisk user's permissions:
+
+- **Set PUID/PGID** in your `.env` file to match your asterisk user
+- **No manual permission changes** required on your Asterisk directories  
+- **Works with any UID/GID** - just run `id asterisk` to find the values
+- **Docker Compose** uses the `user:` directive to run as the specified user
+- **Docker Run** requires `--user UID:GID` flag
+
+Simply set these two values and the connector will run with the correct permissions!
 
 ### Recording Filters
 
@@ -277,6 +306,8 @@ RECORDING_MAX_AGE_HOURS=12
 | REGION | No | us1 | API region (ca1, us1, us2) |
 | AMI_PORT | No | 5038 | AMI port |
 | LOG_LEVEL | No | INFO | Logging level (DEBUG, INFO, WARNING, ERROR) |
+
+**Note:** Set PUID/PGID in your `.env` file and Docker Compose will use them via the `user:` directive to run the container as your asterisk user.
 
 #### CDR Processing
 
@@ -482,6 +513,12 @@ asterisk -rx "manager show settings"
 - Verify API key format: `sk_1234567890abcdef1234567890abcdef` (35 chars total)
 - Check region setting matches your account
 - Ensure API key is active and not expired
+
+**Recording access issues**
+- Verify PUID/PGID in your `.env` match your asterisk user: `id asterisk`
+- Check container is running as correct user: `docker exec sipstack-connector id`
+- If using `RECORDING_DELETE_AFTER_UPLOAD=true`, ensure the volume is mounted with `:rw` instead of `:ro`
+- For docker run, use `--user UID:GID` to set the user directly
 
 ## Advanced Usage
 

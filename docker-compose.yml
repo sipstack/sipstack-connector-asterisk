@@ -10,6 +10,10 @@ services:
         stop_signal: SIGTERM
         stop_grace_period: 30s
 
+        # Run as specific user (set PUID:PGID in .env to match your asterisk user)
+        # Run 'id asterisk' to get these values
+        user: "${PUID:-1000}:${PGID:-1000}"
+        
         environment:
             # Required Configuration
             API_KEY: ${API_KEY} # Your SIPSTACK API key (sk_{32 random characters})
@@ -40,8 +44,7 @@ services:
         volumes:
             # Mount Asterisk spool directory for recording access
             - /var/spool/asterisk:/var/spool/asterisk:ro
-            # Optional: specific monitor directory only
-            # - /var/spool/asterisk/monitor:/var/spool/asterisk/monitor:ro
+            # Note: Use :rw instead of :ro if RECORDING_DELETE_AFTER_UPLOAD=true
         
         # Note: Using host networking - metrics available on host port 8000
         

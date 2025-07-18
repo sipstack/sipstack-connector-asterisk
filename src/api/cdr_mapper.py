@@ -37,6 +37,7 @@ class CDRMapper:
             'accountcode': cdr.accountcode,
             'uniqueid': cdr.uniqueid,
             'linkedid': cdr.linkedid,
+            'sequence': cdr.sequence,
         }
         
         # Add host information if provided

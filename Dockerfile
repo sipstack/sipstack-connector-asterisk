@@ -29,7 +29,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && update-ca-certificates
 
 # Create non-root user
-RUN useradd -r -s /bin/false -m -d /app sipstack
+# Note: When building, users should use --build-arg PUID=xxx PGID=xxx
+# Or just run as root with user: "PUID:PGID" in docker-compose.yml
+ARG PUID=1000
+ARG PGID=1000
+RUN groupadd -g ${PGID} sipstack && \
+    useradd -r -u ${PUID} -g sipstack -s /bin/false -m -d /app sipstack
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
@@ -58,12 +63,12 @@ ENV BATCH_TIMEOUT=30
 # Switch to non-root user
 USER sipstack
 
-# Health check - increased start period to allow for connection initialization
+# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python /app/healthcheck.py || exit 1
 
 # Expose metrics port
 EXPOSE 8000
 
-# Run the application with unbuffered output and proper signal handling
+# Run the application directly
 CMD ["python", "-u", "-m", "main"]
