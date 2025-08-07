@@ -1,0 +1,34 @@
+{
+  "did_mappings": {
+    "14164775498": "gconnect",
+    "18665137797": "telair", 
+    "16478743709": "cpapliving",
+    "16479454033": "gconnect",
+    "12898579633": "gconnect",
+    "16478752259": "lawfirm1",
+    "16478752300": "lawfirm2",
+    "12898579605": "healthclinic",
+    "12898579685": "insurance",
+    "16478743695": "telemed",
+    "19053377797": "sharplight",
+    "15197785354": "makerpizza",
+    "12898579600": "gconnect"
+  },
+  "accountcode_mappings": {
+    "GC": "gconnect",
+    "TL": "telair",
+    "CP": "cpapliving",
+    "SL": "sharplight",
+    "MP": "makerpizza",
+    "P3": "proto3000",
+    "FL": "faultless",
+    "CC": "centrecourt"
+  },
+  "extension_ranges": {
+    "100-199": "gconnect",
+    "200-299": "telair",
+    "300-399": "cpapliving",
+    "400-499": "lawfirm1",
+    "500-599": "healthclinic"
+  }
+}

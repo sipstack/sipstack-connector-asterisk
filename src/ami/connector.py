@@ -18,7 +18,8 @@ from utils.metrics import (
 from .cdr_monitor import CDRMonitor
 from .http_worker import HTTPWorker
 from .direct_sender import DirectCDRSender
-from .recording_watcher import RecordingWatcher
+from .mixmonitor_tracker import mixmonitor_tracker
+from recording_uploader import RecordingUploader
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +54,13 @@ class AmiConnector:
         self.cdr_monitor = None
         self.http_worker = None
         self.cdr_queue = None
+        self.upload_check_task = None
         
-        # Initialize recording watcher if enabled
-        self.recording_watcher = None
-        if self.recording_config.get('watcher_enabled', False):
-            self.recording_watcher = RecordingWatcher(api_client, recording_config)
+        # Recording uploader disabled in v0.9.0 - now using AMI MixMonitor events
+        self.recording_uploader = None
+        # Legacy cron-based uploader disabled - AMI events handle uploads immediately
+        # if recording_config.get('upload_enabled', True):
+        #     self.recording_uploader = RecordingUploader(interval_seconds=60)
         
         if self.cdr_config.get('enabled', False):
             # Create async queue for CDR/CEL records
@@ -110,6 +113,12 @@ class AmiConnector:
             self.ami_client.register_event('RecordFile', self._handle_record_file)
             self.ami_client.register_event('VoicemailMessage', self._handle_voicemail_message)
             
+            # Register MixMonitor event handlers for recording tracking
+            self.ami_client.register_event('MixMonitorStart', self._handle_mixmonitor_start)
+            self.ami_client.register_event('MixMonitorStop', self._handle_mixmonitor_stop)
+            self.ami_client.register_event('MonitorStart', self._handle_mixmonitor_start)  # Fallback for older Asterisk
+            self.ami_client.register_event('MonitorStop', self._handle_mixmonitor_stop)   # Fallback for older Asterisk
+            
             # Register CDR event handlers if enabled
             if self.cdr_monitor:
                 self.ami_client.register_event('Cdr', self.cdr_monitor.handle_cdr_event)
@@ -130,10 +139,13 @@ class AmiConnector:
                 await self.http_worker.start()
                 logger.info("HTTP worker started for CDR batch processing")
                 
-            # Start recording watcher if enabled
-            if self.recording_watcher:
-                await self.recording_watcher.start()
-                logger.info("Recording file watcher started")
+            # Start MixMonitor file size monitoring for completed recordings
+            check_interval = min(int(os.getenv('RECORDING_CHECK_INTERVAL_SECONDS', '30')), 60)
+            await mixmonitor_tracker.start_monitoring(check_interval)
+            
+            # Start upload checking task
+            self.upload_check_task = asyncio.create_task(self._upload_check_loop())
+            logger.info("AMI-based recording upload and monitoring enabled")
             
             # Update metrics with connection status
             record_ami_connection_status(True)
@@ -168,10 +180,21 @@ class AmiConnector:
                 await self.http_worker.stop()
                 logger.info("HTTP worker stopped")
                 
-            # Stop recording watcher if running
-            if self.recording_watcher:
-                await self.recording_watcher.stop()
-                logger.info("Recording file watcher stopped")
+            # Stop MixMonitor monitoring
+            await mixmonitor_tracker.stop_monitoring()
+            
+            # Stop upload checking task
+            if self.upload_check_task:
+                self.upload_check_task.cancel()
+                try:
+                    await self.upload_check_task
+                except asyncio.CancelledError:
+                    pass
+            
+            # Recording uploader disabled in v0.9.0 - using AMI events instead
+            # if self.recording_uploader:
+            #     await self.recording_uploader.stop()
+            #     logger.info("Recording uploader stopped")
             
             self.ami_client.close()
             self.connected = False
@@ -179,7 +202,7 @@ class AmiConnector:
             # Update metrics with connection status
             record_ami_connection_status(False)
     
-    async def _handle_record_file(self, event) -> None:
+    async def _handle_record_file(self, manager, event) -> None:
         try:
             logger.debug(f"Received RecordFile event: {event}")
             
@@ -211,7 +234,7 @@ class AmiConnector:
         except Exception as e:
             logger.error(f"Error handling RecordFile event: {e}")
     
-    async def _handle_voicemail_message(self, event) -> None:
+    async def _handle_voicemail_message(self, manager, event) -> None:
         try:
             logger.debug(f"Received VoicemailMessage event: {event}")
             
@@ -369,3 +392,254 @@ class AmiConnector:
             
             # Record failure in metrics
             record_processed_recording(recording_type, 'error')
+    
+    async def _handle_mixmonitor_start(self, manager, event) -> None:
+        """Handle MixMonitorStart/MonitorStart AMI events."""
+        try:
+            await mixmonitor_tracker.handle_mixmonitor_start(event)
+        except Exception as e:
+            logger.error(f"Error handling MixMonitor start event: {e}", exc_info=True)
+    
+    async def _handle_mixmonitor_stop(self, manager, event) -> None:
+        """Handle MixMonitorStop/MonitorStop AMI events."""
+        try:
+            # Update the tracker with stop event
+            await mixmonitor_tracker.handle_mixmonitor_stop(event)
+            
+            # Don't trigger immediate upload - let the monitoring loop handle it
+            # This prevents uploading files that are still being written
+            # The monitoring loop will detect completion based on stable file size
+                
+        except Exception as e:
+            logger.error(f"Error handling MixMonitor stop event: {e}", exc_info=True)
+    
+    async def _upload_recording_with_metadata(self, filename: str):
+        """Upload recording immediately using AMI-tracked metadata."""
+        try:
+            # Get metadata from tracker
+            metadata = mixmonitor_tracker.get_recording_metadata(filename)
+            if not metadata:
+                logger.warning(f"No AMI metadata found for recording: {filename}")
+                return
+            
+            # Check if already uploaded
+            if metadata.get('uploaded', 0) == 1:
+                logger.debug(f"Recording already uploaded: {filename}")
+                return
+            
+            # Find the actual file path
+            recording_paths = self.recording_config.get('paths', ['/var/spool/asterisk/monitor'])
+            file_path = None
+            
+            for base_path in recording_paths:
+                potential_path = os.path.join(base_path, filename)
+                if os.path.exists(potential_path):
+                    file_path = potential_path
+                    break
+            
+            if not file_path:
+                logger.warning(f"Recording file not found in any configured path: {filename}")
+                return
+            
+            # Mark file as existing
+            mixmonitor_tracker.mark_file_exists(filename)
+            
+            # Build upload command with AMI metadata
+            success = await self._execute_upload_with_ami_data(file_path, metadata)
+            
+            if success:
+                # Mark as uploaded
+                mixmonitor_tracker.mark_uploaded(filename)
+                logger.info(f"Successfully uploaded recording with AMI metadata: {filename}")
+            
+        except Exception as e:
+            logger.error(f"Error uploading recording {filename}: {e}", exc_info=True)
+    
+    async def _execute_upload_with_ami_data(self, file_path: str, ami_metadata: Dict[str, Any]) -> bool:
+        """Execute the upload using curl command with AMI-derived metadata.
+        
+        Returns:
+            bool: True if upload successful, False otherwise
+        """
+        try:
+            import subprocess
+            
+            # Verify file exists and has content
+            if not os.path.exists(file_path):
+                logger.error(f"Recording file does not exist: {file_path}")
+                return False
+            
+            file_size = os.path.getsize(file_path)
+            if file_size == 0:
+                logger.error(f"Recording file is empty: {file_path}")
+                return False
+                
+            logger.debug(f"Uploading file: {file_path} ({file_size} bytes)")
+            
+            # Build curl command with proper metadata
+            api_key = os.getenv('API_KEY')
+            region = os.getenv('REGION', 'us1')
+            ami_host = os.getenv('AMI_HOST', 'localhost')
+            
+            # Determine API URL based on region
+            if region in ['dev', 'ca1']:
+                api_url = 'https://api-dev.sipstack.com/v1/mqs/recording'
+            elif region == 'us2':
+                api_url = 'https://api-us2.sipstack.com/v1/mqs/recording'
+            else:
+                api_url = 'https://api.sipstack.com/v1/mqs/recording'
+            
+            # Get version - try local file first, then container path
+            version = "0.9.8"  # Default fallback
+            version_files = ["VERSION", "/app/VERSION", "connectors/asterisk/VERSION"]
+            for vf in version_files:
+                if os.path.exists(vf):
+                    with open(vf, 'r') as f:
+                        version = f.read().strip()
+                        break
+            
+            # Determine content type
+            filename = os.path.basename(file_path)
+            if filename.lower().endswith('.mp3'):
+                content_type = 'audio/mpeg'
+            elif filename.lower().endswith('.gsm'):
+                content_type = 'audio/wav'  # GSM sent as wav for compatibility
+            else:
+                content_type = 'audio/wav'
+            
+            # Escape the file path for shell - wrap in single quotes
+            escaped_path = f"'{file_path}'"
+            
+            # Build curl command as a single shell string (like the working bash script)
+            # Note: removed -f flag to see error responses
+            curl_cmd = f"""curl -s -w '\\n%{{http_code}}' -X POST \
+-H 'Authorization: Bearer {api_key}' \
+-H 'User-Agent: SIPSTACK-Connector-Asterisk/{version}' \
+-H 'X-Asterisk-Hostname: {ami_host}' \
+-F 'recording_id={filename}' \
+-F 'src_number={ami_metadata.get("callerid_num", "")}' \
+-F 'dst_number={ami_metadata.get("exten", "")}' \
+-F 'call_id={ami_metadata.get("uniqueid", "")}' \
+-F 'linkedid={ami_metadata.get("linkedid", ami_metadata.get("uniqueid", ""))}' \
+-F 'channel_state={ami_metadata.get("channel_state", "")}' \
+-F 'language={ami_metadata.get("language", "")}' \
+-F 'priority={ami_metadata.get("priority", "")}' \
+-F 'audio=@{escaped_path};type={content_type}' \
+{api_url}"""
+            
+            # Execute upload
+            logger.info(f"Uploading recording with AMI metadata: {filename} -> {ami_metadata.get('uniqueid')}/{ami_metadata.get('linkedid')}")
+            
+            # Log the curl command for debugging (without the API key)
+            debug_cmd = curl_cmd.replace(api_key, 'sk_[REDACTED]')
+            logger.debug(f"Curl command: {debug_cmd}")
+            
+            # Execute the curl command using shell
+            result = subprocess.run(curl_cmd, shell=True, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')
+                http_code = lines[-1] if lines else '000'
+                response_body = '\n'.join(lines[:-1]) if len(lines) > 1 else ''
+                
+                if http_code == '202':
+                    logger.info(f"Successfully uploaded recording: {filename}")
+                    # Files remain in place - no moving or deletion
+                    return True
+                    
+                else:
+                    logger.error(f"Upload failed for {filename}: HTTP {http_code}")
+                    logger.error(f"Response body: {response_body}")
+                    logger.error(f"Full stdout: {result.stdout}")
+                    # Track the failure in SQLite
+                    mixmonitor_tracker.mark_upload_failed(
+                        filename, 
+                        f"HTTP {http_code}: {response_body[:200]}", 
+                        int(http_code) if http_code.isdigit() else 0
+                    )
+                    return False
+            else:
+                error_msg = f"Curl failed with code {result.returncode}"
+                logger.error(f"Curl command failed for {filename} with return code {result.returncode}")
+                logger.error(f"STDOUT: {result.stdout}")
+                logger.error(f"STDERR: {result.stderr}")
+                # Track the failure in SQLite
+                mixmonitor_tracker.mark_upload_failed(filename, f"{error_msg}: {result.stderr[:200]}", 0)
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error executing upload for {file_path}: {e}", exc_info=True)
+            # Track the failure in SQLite
+            mixmonitor_tracker.mark_upload_failed(os.path.basename(file_path), str(e), 0)
+            return False
+    
+    async def check_and_upload_completed_recordings(self):
+        """Check for completed recordings and upload them."""
+        try:
+            # Get retry interval from environment (0 = disabled)
+            retry_minutes = int(os.getenv('RECORDING_UPLOAD_RETRY_MINUTES', '5'))
+            
+            completed = mixmonitor_tracker.get_completed_recordings(retry_minutes)
+            if not completed:
+                return
+                
+            logger.info(f"Found {len(completed)} recordings ready for upload (retry enabled: {retry_minutes > 0})")
+            
+            for recording in completed:
+                filename = recording['filename']
+                file_path = recording['file_path']
+                upload_attempts = recording.get('upload_attempts', 0)
+                uploaded = recording.get('uploaded', 0)
+                
+                # Skip if already successfully uploaded
+                if uploaded == 1:
+                    logger.debug(f"Skipping already uploaded recording: {filename}")
+                    continue
+                
+                if not file_path or not os.path.exists(file_path):
+                    logger.warning(f"Completed recording file not found: {file_path}")
+                    mixmonitor_tracker.mark_upload_failed(filename, "File not found", 404)
+                    continue
+                
+                if upload_attempts > 0:
+                    logger.info(f"Retrying upload for {filename} (attempt #{upload_attempts + 1})")
+                
+                try:
+                    # Upload using existing method with the tracked metadata
+                    success = await self._execute_upload_with_ami_data(file_path, recording)
+                    
+                    if success:
+                        # Mark as uploaded only if successful
+                        mixmonitor_tracker.mark_uploaded(filename)
+                        # Success already logged in _execute_upload_with_ami_data
+                    else:
+                        # Already logged error in _execute_upload_with_ami_data
+                        pass
+                    
+                except Exception as e:
+                    logger.error(f"Failed to upload recording {filename}: {e}")
+                    mixmonitor_tracker.mark_upload_failed(filename, str(e), 0)
+                    
+        except Exception as e:
+            logger.error(f"Error checking completed recordings: {e}", exc_info=True)
+    
+    async def _upload_check_loop(self):
+        """Periodic task to check for completed recordings and upload them."""
+        # Get check interval from environment, default to 30 seconds, max 60 seconds
+        check_interval = min(int(os.getenv('RECORDING_CHECK_INTERVAL_SECONDS', '30')), 60)
+        logger.info(f"Recording upload check interval: {check_interval} seconds")
+        
+        while self.connected:
+            try:
+                # Check periodically for completed recordings
+                await asyncio.sleep(check_interval)
+                
+                # Check if the monitoring loop flagged that we should check for uploads
+                if mixmonitor_tracker.check_upload_needed() or True:  # Always check for now
+                    await self.check_and_upload_completed_recordings()
+                    
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in upload check loop: {e}", exc_info=True)
+                await asyncio.sleep(check_interval)

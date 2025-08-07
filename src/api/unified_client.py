@@ -34,7 +34,9 @@ class UnifiedApiClient:
                 api_key=cdr_config['api_key'],
                 timeout=cdr_config.get('timeout', 30.0),
                 max_retries=cdr_config.get('max_retries', 3),
-                host_info=host_info
+                host_info=host_info,
+                max_memory_file_size=cdr_config.get('max_memory_file_size', 10 * 1024 * 1024),  # 10MB default
+                max_concurrent_uploads=cdr_config.get('max_concurrent_uploads', 10)
             )
             
     async def start(self):

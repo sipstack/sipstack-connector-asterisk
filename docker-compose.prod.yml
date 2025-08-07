@@ -1,0 +1,105 @@
+version: "3.8"
+
+services:
+    sipstack-connector:
+        image: ghcr.io/sipstack/asterisk-connector:latest
+        container_name: sipstack-connector
+        restart: unless-stopped
+        network_mode: host
+        # Proper signal handling
+        stop_signal: SIGTERM
+        stop_grace_period: 30s
+
+        # Run as specific user (set PUID:PGID in .env to match your asterisk user)
+        # Run 'id asterisk' to get these values
+        user: "${PUID:-1000}:${PGID:-1000}"
+        
+        environment:
+            # Required Configuration
+            API_KEY: ${API_KEY} # Your SIPSTACK API key (sk_{32 random characters})
+            AMI_HOST: ${AMI_HOST} # Asterisk server hostname/IP
+            AMI_PORT: ${AMI_PORT:-5038} # AMI port (default: 5038)
+            AMI_USERNAME: ${AMI_USERNAME} # AMI username
+            AMI_PASSWORD: ${AMI_PASSWORD} # AMI password
+            REGION: ${REGION:-us1} # API region (ca1, us1, us2)
+
+            # Optional Configuration
+            LOG_LEVEL: ${LOG_LEVEL:-INFO} # Logging level
+            BATCH_SIZE: ${BATCH_SIZE:-200} # CDR batch size
+            BATCH_TIMEOUT: ${BATCH_TIMEOUT:-30} # Batch timeout in seconds
+
+            # Monitoring
+            MONITORING_ENABLED: ${MONITORING_ENABLED:-true}
+            MONITORING_PORT: ${MONITORING_PORT:-8000}
+            
+            # Recording Watcher Configuration
+            RECORDING_WATCHER_ENABLED: ${RECORDING_WATCHER_ENABLED:-false}
+            RECORDING_WATCH_PATHS: ${RECORDING_WATCH_PATHS:-/var/spool/asterisk/monitor}
+            RECORDING_FILE_EXTENSIONS: ${RECORDING_FILE_EXTENSIONS:-.wav,.mp3,.gsm}
+            RECORDING_MIN_FILE_SIZE: ${RECORDING_MIN_FILE_SIZE:-1024}
+            RECORDING_PROCESS_EXISTING: ${RECORDING_PROCESS_EXISTING:-false}
+            RECORDING_DELETE_AFTER_UPLOAD: ${RECORDING_DELETE_AFTER_UPLOAD:-false}
+            
+            # Memory optimization settings - PRODUCTION VALUES
+            CDR_MAX_MEMORY_FILE_SIZE: ${CDR_MAX_MEMORY_FILE_SIZE:-10485760}  # 10MB default
+            CDR_MAX_CONCURRENT_UPLOADS: ${CDR_MAX_CONCURRENT_UPLOADS:-5}      # Reduced for production
+
+        # Volume bindings for Asterisk recordings
+        volumes:
+            # Mount Asterisk spool directory for recording access
+            - /var/spool/asterisk:/var/spool/asterisk:ro
+            # Note: Use :rw instead of :ro if RECORDING_DELETE_AFTER_UPLOAD=true
+        
+        # Note: Using host networking - metrics available on host port 8000
+        
+        # Health check with memory awareness
+        healthcheck:
+            test: ["CMD", "sh", "-c", "python -c \"import socket; socket.create_connection(('localhost', 8000), timeout=5)\" && python -c \"import psutil; exit(0 if psutil.virtual_memory().percent < 90 else 1)\""]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 10s
+
+        # Logging configuration - production settings
+        logging:
+            driver: "json-file"
+            options:
+                max-size: "50m"
+                max-file: "5"
+
+        # PRODUCTION Resource limits - adjust based on your deployment size
+        # Small deployment (< 100 calls/hour)
+        deploy:
+            resources:
+                limits:
+                    cpus: "0.5"
+                    memory: 256M
+                reservations:
+                    cpus: "0.1"
+                    memory: 128M
+                    
+        # Medium deployment (100-1000 calls/hour) - uncomment to use
+        # deploy:
+        #     resources:
+        #         limits:
+        #             cpus: "1.0"
+        #             memory: 512M
+        #         reservations:
+        #             cpus: "0.2"
+        #             memory: 256M
+                    
+        # Large deployment (> 1000 calls/hour) - uncomment to use
+        # deploy:
+        #     resources:
+        #         limits:
+        #             cpus: "2.0"
+        #             memory: 1G
+        #         reservations:
+        #             cpus: "0.5"
+        #             memory: 512M
+
+# Optional: External network if Asterisk is in Docker
+# networks:
+#   default:
+#     external:
+#       name: asterisk-network

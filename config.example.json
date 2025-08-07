@@ -1,0 +1,62 @@
+{
+  "extension": {
+    "min_length": 2,
+    "max_length": 7,
+    "comment": "Define your PBX extension number ranges"
+  },
+  "international": {
+    "prefixes": ["011", "00", "+"],
+    "e164_enabled": true,
+    "comment": "International dialing configuration"
+  },
+  "contexts": {
+    "internal": [
+      "custom-internal-context",
+      "office-phones-*",
+      "department-*"
+    ],
+    "external": [
+      "provider-xyz-*",
+      "sip-trunk-abc",
+      "voip-carrier-*"
+    ],
+    "outbound": [
+      "custom-outbound-route",
+      "long-distance-*"
+    ],
+    "comment": "Add your custom context patterns here"
+  },
+  "performance": {
+    "enable_cache": true,
+    "cache_ttl": 3600,
+    "comment": "Performance tuning options"
+  },
+  "transfer": {
+    "enabled": true,
+    "patterns": [
+      "macro-dialout-trunk-predial-hook",
+      "macro-dialout-dundi",
+      "transferer",
+      "transferred",
+      "custom-transfer-*"
+    ],
+    "comment": "Transfer detection patterns"
+  },
+  "queue_ivr": {
+    "queue_patterns": [
+      "ext-queues",
+      "from-queue",
+      "queue-*",
+      "app-queue",
+      "custom-queue-*"
+    ],
+    "ivr_patterns": [
+      "ivr-*",
+      "ext-ivr",
+      "from-ivr",
+      "app-ivr",
+      "custom-ivr-*"
+    ],
+    "comment": "Queue and IVR detection patterns"
+  }
+}

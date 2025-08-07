@@ -60,6 +60,8 @@ def load_config_from_env() -> Dict[str, Any]:
             'queue_size': int(os.getenv('CDR_QUEUE_SIZE', '10000')),
             'max_retries': int(os.getenv('CDR_MAX_RETRIES', '3')),
             'max_concurrent': int(os.getenv('CDR_MAX_CONCURRENT', '10')),  # For direct mode
+            'max_memory_file_size': int(os.getenv('CDR_MAX_MEMORY_FILE_SIZE', '10485760')),  # 10MB default
+            'max_concurrent_uploads': int(os.getenv('CDR_MAX_CONCURRENT_UPLOADS', '10')),
             # Filtering options
             'filter': {
                 'enabled': os.getenv('CDR_FILTER_ENABLED', 'true').lower() == 'true',

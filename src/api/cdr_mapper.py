@@ -8,6 +8,42 @@ class CDRMapper:
     """Maps between Asterisk CDR format and MQS API format."""
     
     @staticmethod
+    def parse_caller_name(clid: str) -> Optional[str]:
+        """
+        Parse caller name from CLID format.
+        
+        Examples:
+        - "John Doe" <4165551234> -> John Doe
+        - "314-RE-24-Trimaxx Rlty-" <4163170972> -> 314-RE-24-Trimaxx Rlty
+        - <4165551234> -> None
+        - 4165551234 -> None
+        
+        Args:
+            clid: Caller ID string in Asterisk format
+            
+        Returns:
+            Extracted caller name or None if not found
+        """
+        if not clid:
+            return None
+            
+        # Look for pattern: "Name" <number> or Name <number>
+        # Match everything before the opening angle bracket
+        angle_bracket_pos = clid.find('<')
+        if angle_bracket_pos > 0:
+            name = clid[:angle_bracket_pos].strip()
+            # Remove surrounding quotes if present
+            if name.startswith('"') and name.endswith('"'):
+                name = name[1:-1]
+            # Remove trailing dash if present
+            if name.endswith('-'):
+                name = name[:-1].strip()
+            # Return name if it's not empty
+            return name if name else None
+        
+        return None
+    
+    @staticmethod
     def to_mqs_format(cdr: CDR, host_info: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """
         Convert Asterisk CDR to MQS expected format.
@@ -19,12 +55,16 @@ class CDRMapper:
         Returns:
             Dictionary in MQS expected format
         """
+        # Parse caller name from CLID
+        caller_name = CDRMapper.parse_caller_name(cdr.clid)
+        
         # Map to MQS expected minimal fields
         mqs_cdr = {
             'src': cdr.src,
             'dst': cdr.dst,
             'call_id': cdr.uniqueid,  # Use uniqueid as call_id
             'call_type': cdr.call_type or 'internal',
+            'direction': cdr.call_type or 'internal',  # Send direction field for API consistency
             'duration': cdr.duration,
             
             # Additional useful fields that MQS might accept
@@ -38,6 +78,16 @@ class CDRMapper:
             'uniqueid': cdr.uniqueid,
             'linkedid': cdr.linkedid,
             'sequence': cdr.sequence,
+            'context': cdr.context,    # Include source context
+            'dcontext': cdr.dcontext,  # Include destination context
+            
+            # Include parsed caller name for display
+            'src_name': caller_name,
+            # Keep full CLID for backwards compatibility
+            'clid': cdr.clid,
+            
+            # Include tenant if extracted
+            'tenant': cdr.tenant,
         }
         
         # Add host information if provided

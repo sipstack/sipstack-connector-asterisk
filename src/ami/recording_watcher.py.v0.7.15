@@ -1,14 +1,15 @@
 import asyncio
 import logging
 import os
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Set, Optional, List, Any
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileModifiedEvent
-from utils.cdr_cache import get_cdr_cache
-from utils.call_direction import detect_call_direction
+try:
+    from watchdog.events import FileClosedEvent
+except ImportError:
+    FileClosedEvent = None
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +22,27 @@ class RecordingEventHandler(FileSystemEventHandler):
     def on_created(self, event):
         if not event.is_directory and self._is_recording_file(event.src_path):
             logger.debug(f"Recording file created: {event.src_path}")
-            # Schedule the async task in the main event loop
-            loop = self.recording_watcher.loop
-            if loop and not loop.is_closed():
-                asyncio.run_coroutine_threadsafe(
-                    self.recording_watcher._handle_new_recording(event.src_path), 
-                    loop
-                )
+            # Add to tracking set for monitoring
+            self.recording_watcher._add_file_to_monitor(event.src_path)
+            
+    def on_modified(self, event):
+        if not event.is_directory and self._is_recording_file(event.src_path):
+            logger.debug(f"Recording file modified: {event.src_path}")
+            # Update last modified time in tracking
+            self.recording_watcher._update_file_modified_time(event.src_path)
+    
+    def on_closed(self, event):
+        # Only use if FileClosedEvent is available
+        if FileClosedEvent and isinstance(event, FileClosedEvent):
+            if not event.is_directory and self._is_recording_file(event.src_path):
+                logger.debug(f"Recording file closed: {event.src_path}")
+                # Schedule the async task in the main event loop
+                loop = self.recording_watcher.loop
+                if loop and not loop.is_closed():
+                    asyncio.run_coroutine_threadsafe(
+                        self.recording_watcher._handle_new_recording(event.src_path), 
+                        loop
+                    )
             
     def _is_recording_file(self, file_path: str) -> bool:
         """Check if file matches recording patterns from configuration"""
@@ -48,6 +63,10 @@ class RecordingWatcher:
         self.observer = None
         self.event_handler = RecordingEventHandler(self)
         self.loop = None  # Will be set when start() is called
+        
+        # File monitoring for stability checks
+        self.monitored_files = {}  # path -> last_modified_time
+        self.monitor_task = None
         
         # Filtering options
         self.filter_config = recording_config.get('filter', {})
@@ -77,6 +96,10 @@ class RecordingWatcher:
         # Start the observer
         self.observer.start()
         
+        # Start the file monitoring task
+        self.monitor_task = asyncio.create_task(self._monitor_files_task())
+        logger.info("Started file monitoring task")
+        
         # Process any existing files on startup if configured
         if self.recording_config.get('process_existing', False):
             await self._scan_existing_recordings()
@@ -87,6 +110,14 @@ class RecordingWatcher:
             logger.info("Stopping recording file watcher")
             self.observer.stop()
             self.observer.join()
+        
+        # Stop the file monitor task if running
+        if self.monitor_task and not self.monitor_task.done():
+            self.monitor_task.cancel()
+            try:
+                await self.monitor_task
+            except asyncio.CancelledError:
+                pass
             
     async def _scan_existing_recordings(self):
         """Scan for existing recordings on startup"""
@@ -137,7 +168,7 @@ class RecordingWatcher:
             self.processing_files.discard(file_path)
             
     async def _wait_for_file_stable(self, file_path: str):
-        """Wait for file to finish writing - ORIGINAL IMPLEMENTATION"""
+        """Wait for file to finish writing"""
         if not os.path.exists(file_path):
             return
             
@@ -150,9 +181,10 @@ class RecordingWatcher:
         while stable_checks < 3 and (datetime.now() - start_time).total_seconds() < max_wait_time:
             try:
                 current_size = os.path.getsize(file_path)
+                current_mtime = os.path.getmtime(file_path)
                 
-                # Check if size is stable and greater than minimum
-                if current_size == last_size and current_size > self.min_file_size:
+                # Check both size and modification time
+                if current_size == last_size and current_size > 0:
                     stable_checks += 1
                     logger.debug(f"File stability check {stable_checks}/3 for {file_path} (size: {current_size})")
                 else:
@@ -185,7 +217,6 @@ class RecordingWatcher:
         try:
             file_size = os.path.getsize(file_path)
             if file_size < self.min_file_size:
-                logger.debug(f"File too small ({file_size} bytes < {self.min_file_size} bytes): {file_path}")
                 return False
                 
             # Check file age
@@ -514,35 +545,6 @@ class RecordingWatcher:
     async def _process_recording(self, file_path: str, metadata: Dict[str, Any]):
         """Process and upload recording file"""
         try:
-            # Try to get direction from CDR cache if not already set
-            if 'direction' not in metadata:
-                cdr_cache = get_cdr_cache()
-                cached_direction = cdr_cache.get_direction_for_recording(metadata)
-                
-                if cached_direction:
-                    metadata['direction'] = cached_direction
-                    logger.info(f"Found direction from CDR cache: {cached_direction}")
-                else:
-                    # Fallback: Use enhanced direction detection with available metadata
-                    # Build CDR-like data structure for direction detection
-                    cdr_data = {
-                        'src': metadata.get('src_number') or metadata.get('caller_id_num', ''),
-                        'dst': metadata.get('dst_number') or metadata.get('connected_line_num', ''),
-                        'channel': '',  # Not available from recording metadata
-                        'context': '',  # Not available from recording metadata
-                        'dcontext': '',  # Not available from recording metadata
-                    }
-                    
-                    # Try to detect direction from phone number patterns
-                    if cdr_data['src'] or cdr_data['dst']:
-                        direction, _ = detect_call_direction(cdr_data)
-                        metadata['direction'] = direction
-                        logger.info(f"Detected direction from phone patterns: {direction}")
-                    else:
-                        # Final fallback
-                        metadata['direction'] = 'unknown'
-                        logger.warning(f"Could not determine direction for recording: {file_path}")
-            
             # Submit recording to the API
             logger.info(f"Uploading recording to API: {file_path}")
             logger.debug(f"Recording metadata: {metadata}")
@@ -559,3 +561,92 @@ class RecordingWatcher:
                     
         except Exception as e:
             logger.error(f"Error processing recording {file_path}: {e}")
+    
+    def _add_file_to_monitor(self, file_path: str):
+        """Add a file to the monitoring set."""
+        try:
+            if os.path.exists(file_path):
+                mtime = os.path.getmtime(file_path)
+                self.monitored_files[file_path] = {
+                    'last_modified': mtime,
+                    'last_size': os.path.getsize(file_path),
+                    'stable_checks': 0
+                }
+                logger.debug(f"Added file to monitoring: {file_path}")
+        except OSError as e:
+            logger.warning(f"Failed to add file to monitoring {file_path}: {e}")
+    
+    def _update_file_modified_time(self, file_path: str):
+        """Update the last modified time for a monitored file."""
+        try:
+            if os.path.exists(file_path):
+                mtime = os.path.getmtime(file_path)
+                size = os.path.getsize(file_path)
+                if file_path in self.monitored_files:
+                    self.monitored_files[file_path]['last_modified'] = mtime
+                    self.monitored_files[file_path]['last_size'] = size
+                    self.monitored_files[file_path]['stable_checks'] = 0  # Reset stability
+                else:
+                    self._add_file_to_monitor(file_path)
+                logger.debug(f"Updated file modified time: {file_path} (size: {size})")
+        except OSError as e:
+            logger.warning(f"Failed to update file modified time {file_path}: {e}")
+    
+    async def _monitor_files_task(self):
+        """Background task to check monitored files for stability."""
+        logger.info("File monitoring task started")
+        try:
+            while True:
+                await asyncio.sleep(2.0)  # Check every 2 seconds
+                
+                # Copy the dict to avoid modification during iteration
+                files_to_check = list(self.monitored_files.items())
+                
+                for file_path, info in files_to_check:
+                    if file_path in self.processing_files or file_path in self.processed_files:
+                        # Already being processed or done
+                        del self.monitored_files[file_path]
+                        continue
+                    
+                    try:
+                        if not os.path.exists(file_path):
+                            # File disappeared
+                            del self.monitored_files[file_path]
+                            continue
+                        
+                        current_mtime = os.path.getmtime(file_path)
+                        current_size = os.path.getsize(file_path)
+                        time_since_modified = datetime.now().timestamp() - current_mtime
+                        
+                        # Check if file hasn't been modified for stabilization_time
+                        if (time_since_modified >= self.stabilization_time and 
+                            current_size == info['last_size'] and 
+                            current_size > 0):
+                            
+                            info['stable_checks'] += 1
+                            logger.debug(f"File stable check {info['stable_checks']}/3 for {file_path}")
+                            
+                            if info['stable_checks'] >= 3:
+                                # File is stable, process it
+                                logger.info(f"File is stable, processing: {file_path} (size: {current_size})")
+                                del self.monitored_files[file_path]
+                                
+                                # Schedule processing in the event loop
+                                asyncio.create_task(self._handle_new_recording(file_path))
+                        else:
+                            # File was modified or size changed
+                            if current_size != info['last_size']:
+                                logger.debug(f"File size changed from {info['last_size']} to {current_size}: {file_path}")
+                            info['last_modified'] = current_mtime
+                            info['last_size'] = current_size
+                            info['stable_checks'] = 0
+                            
+                    except OSError as e:
+                        logger.warning(f"Error checking file {file_path}: {e}")
+                        del self.monitored_files[file_path]
+                        
+        except asyncio.CancelledError:
+            logger.info("File monitoring task cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"File monitoring task error: {e}", exc_info=True)

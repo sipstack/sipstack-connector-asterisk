@@ -24,27 +24,24 @@ services:
             REGION: ${REGION:-us1} # API region (ca1, us1, us2)
 
             # Optional Configuration
-            LOG_LEVEL: ${LOG_LEVEL:-INFO} # Logging level
-            BATCH_SIZE: ${BATCH_SIZE:-200} # CDR batch size
-            BATCH_TIMEOUT: ${BATCH_TIMEOUT:-30} # Batch timeout in seconds
+            LOG_LEVEL: ${LOG_LEVEL:-INFO}
+            CDR_MODE: ${CDR_MODE:-batch}
+            CDR_BATCH_SIZE: ${CDR_BATCH_SIZE:-200}
+            CDR_BATCH_TIMEOUT: ${CDR_BATCH_TIMEOUT:-30}
 
             # Monitoring
             MONITORING_ENABLED: ${MONITORING_ENABLED:-true}
             MONITORING_PORT: ${MONITORING_PORT:-8000}
             
-            # Recording Watcher Configuration
-            RECORDING_WATCHER_ENABLED: ${RECORDING_WATCHER_ENABLED:-false}
+            # Recording Upload Configuration
+            RECORDING_CHECK_INTERVAL_SECONDS: ${RECORDING_CHECK_INTERVAL_SECONDS:-20}
+            RECORDING_UPLOAD_RETRY_MINUTES: ${RECORDING_UPLOAD_RETRY_MINUTES:-5}
             RECORDING_WATCH_PATHS: ${RECORDING_WATCH_PATHS:-/var/spool/asterisk/monitor}
-            RECORDING_FILE_EXTENSIONS: ${RECORDING_FILE_EXTENSIONS:-.wav,.mp3,.gsm}
-            RECORDING_MIN_FILE_SIZE: ${RECORDING_MIN_FILE_SIZE:-1024}
-            RECORDING_PROCESS_EXISTING: ${RECORDING_PROCESS_EXISTING:-false}
-            RECORDING_DELETE_AFTER_UPLOAD: ${RECORDING_DELETE_AFTER_UPLOAD:-false}
 
         # Volume bindings for Asterisk recordings
         volumes:
-            # Mount Asterisk spool directory for recording access
+            # Mount Asterisk spool directory for recording access (read-only)
             - /var/spool/asterisk:/var/spool/asterisk:ro
-            # Note: Use :rw instead of :ro if RECORDING_DELETE_AFTER_UPLOAD=true
         
         # Note: Using host networking - metrics available on host port 8000
         

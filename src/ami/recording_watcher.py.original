@@ -1,14 +1,11 @@
 import asyncio
 import logging
 import os
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Set, Optional, List, Any
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileModifiedEvent
-from utils.cdr_cache import get_cdr_cache
-from utils.call_direction import detect_call_direction
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +17,17 @@ class RecordingEventHandler(FileSystemEventHandler):
         
     def on_created(self, event):
         if not event.is_directory and self._is_recording_file(event.src_path):
-            logger.debug(f"Recording file created: {event.src_path}")
+            # Schedule the async task in the main event loop
+            loop = self.recording_watcher.loop
+            if loop and not loop.is_closed():
+                asyncio.run_coroutine_threadsafe(
+                    self.recording_watcher._handle_new_recording(event.src_path), 
+                    loop
+                )
+            
+    def on_modified(self, event):
+        # Handle modified events for files that might still be writing
+        if not event.is_directory and self._is_recording_file(event.src_path):
             # Schedule the async task in the main event loop
             loop = self.recording_watcher.loop
             if loop and not loop.is_closed():
@@ -42,7 +49,7 @@ class RecordingWatcher:
         self.watch_paths = recording_config.get('watch_paths', ['/var/spool/asterisk/monitor'])
         self.file_extensions = recording_config.get('file_extensions', ['.wav', '.mp3', '.gsm'])
         self.min_file_size = recording_config.get('min_file_size', 1024)  # 1KB minimum
-        self.stabilization_time = recording_config.get('stabilization_time', 5.0)  # Wait for file to finish writing
+        self.stabilization_time = recording_config.get('stabilization_time', 2.0)  # Wait for file to finish writing
         self.processed_files = set()
         self.processing_files = set()
         self.observer = None
@@ -137,40 +144,28 @@ class RecordingWatcher:
             self.processing_files.discard(file_path)
             
     async def _wait_for_file_stable(self, file_path: str):
-        """Wait for file to finish writing - ORIGINAL IMPLEMENTATION"""
+        """Wait for file to finish writing"""
         if not os.path.exists(file_path):
             return
             
         last_size = -1
         stable_checks = 0
-        max_wait_time = 60  # Maximum 60 seconds for large recordings
+        max_wait_time = 30  # Maximum 30 seconds
         start_time = datetime.now()
         
-        # Need 3 consecutive checks with same size to consider stable
-        while stable_checks < 3 and (datetime.now() - start_time).total_seconds() < max_wait_time:
+        while stable_checks < 2 and (datetime.now() - start_time).total_seconds() < max_wait_time:
             try:
                 current_size = os.path.getsize(file_path)
-                
-                # Check if size is stable and greater than minimum
-                if current_size == last_size and current_size > self.min_file_size:
+                if current_size == last_size:
                     stable_checks += 1
-                    logger.debug(f"File stability check {stable_checks}/3 for {file_path} (size: {current_size})")
                 else:
-                    if stable_checks > 0:
-                        logger.debug(f"File size changed from {last_size} to {current_size}, resetting stability check")
                     stable_checks = 0
                     last_size = current_size
                     
                 await asyncio.sleep(self.stabilization_time)
             except OSError:
                 # File might have been moved/deleted
-                logger.warning(f"File disappeared during stability check: {file_path}")
                 break
-                
-        if stable_checks >= 3:
-            logger.info(f"File is stable after {(datetime.now() - start_time).total_seconds():.1f}s: {file_path} (final size: {last_size})")
-        else:
-            logger.warning(f"File stability check timed out after {max_wait_time}s: {file_path}")
                 
     def _should_process_file(self, file_path: str) -> bool:
         """Check if file should be processed based on filters"""
@@ -185,7 +180,6 @@ class RecordingWatcher:
         try:
             file_size = os.path.getsize(file_path)
             if file_size < self.min_file_size:
-                logger.debug(f"File too small ({file_size} bytes < {self.min_file_size} bytes): {file_path}")
                 return False
                 
             # Check file age
@@ -514,35 +508,6 @@ class RecordingWatcher:
     async def _process_recording(self, file_path: str, metadata: Dict[str, Any]):
         """Process and upload recording file"""
         try:
-            # Try to get direction from CDR cache if not already set
-            if 'direction' not in metadata:
-                cdr_cache = get_cdr_cache()
-                cached_direction = cdr_cache.get_direction_for_recording(metadata)
-                
-                if cached_direction:
-                    metadata['direction'] = cached_direction
-                    logger.info(f"Found direction from CDR cache: {cached_direction}")
-                else:
-                    # Fallback: Use enhanced direction detection with available metadata
-                    # Build CDR-like data structure for direction detection
-                    cdr_data = {
-                        'src': metadata.get('src_number') or metadata.get('caller_id_num', ''),
-                        'dst': metadata.get('dst_number') or metadata.get('connected_line_num', ''),
-                        'channel': '',  # Not available from recording metadata
-                        'context': '',  # Not available from recording metadata
-                        'dcontext': '',  # Not available from recording metadata
-                    }
-                    
-                    # Try to detect direction from phone number patterns
-                    if cdr_data['src'] or cdr_data['dst']:
-                        direction, _ = detect_call_direction(cdr_data)
-                        metadata['direction'] = direction
-                        logger.info(f"Detected direction from phone patterns: {direction}")
-                    else:
-                        # Final fallback
-                        metadata['direction'] = 'unknown'
-                        logger.warning(f"Could not determine direction for recording: {file_path}")
-            
             # Submit recording to the API
             logger.info(f"Uploading recording to API: {file_path}")
             logger.debug(f"Recording metadata: {metadata}")

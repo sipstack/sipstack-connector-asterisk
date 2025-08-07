@@ -3,7 +3,26 @@ import asyncio
 import logging
 import signal
 import sys
+import os
 from pathlib import Path
+
+# Load .env file if it exists
+try:
+    from dotenv import load_dotenv
+    # Look for .env file in multiple locations
+    env_paths = [
+        Path.cwd() / '.env',  # Current directory
+        Path('/etc/sipstack-connector/.env'),  # System config directory
+        Path(__file__).parent.parent / '.env',  # Connector root directory
+    ]
+    for env_path in env_paths:
+        if env_path.exists():
+            load_dotenv(env_path)
+            print(f"Loaded environment from {env_path}")
+            break
+except ImportError:
+    # dotenv not available, will use existing environment variables
+    pass
 
 from config.config_loader import load_config
 from config.env_config import load_config_from_env

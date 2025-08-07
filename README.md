@@ -32,7 +32,7 @@ read = system,call,log,verbose,agent,user,dtmf,reporting,cdr,dialplan
 write = system,call,agent,user,command,reporting,originate
 ```
 
-#### 2.2 Enable CDR Manager with LinkedID Support
+#### 2.2 Enable CDR Manager with LinkedID and CallerID Support
 
 Edit `/etc/asterisk/cdr_manager.conf`:
 
@@ -41,12 +41,33 @@ Edit `/etc/asterisk/cdr_manager.conf`:
 enabled = yes
 
 ; LinkedID and Sequence support for call flow tracking
+; CallerID support for displaying caller names in analytics
 [mappings]
 linkedid => LinkedID
 sequence => Sequence
+clid => CallerID
 ```
 
-#### 2.3 Reload Configuration
+#### 2.3 Enable CEL (Channel Event Logging) for Enhanced DID Tracking
+
+Edit `/etc/asterisk/cel.conf` to enable CEL for accurate DID/DNID tracking:
+
+```ini
+[general]
+enable=yes
+dateformat=%F %T.%3q
+events=CHAN_START,CHAN_END,HANGUP,ANSWER,BRIDGE_ENTER,BRIDGE_EXIT,APP_START,APP_END,PARK_START,PARK_END,LINKEDID_END
+
+[manager]
+enabled = yes
+```
+
+CEL provides more detailed call event tracking than CDR, including:
+- **DNID (Dialed Number ID)**: The actual number dialed by the caller
+- **Call flow events**: Track calls through IVRs, queues, and transfers
+- **LinkedID tracking**: Group all events for a single call together
+
+#### 2.4 Reload Configuration
 
 ```bash
 # Reload AMI configuration
@@ -56,11 +77,18 @@ asterisk -rx "manager reload"
 asterisk -rx "module unload cdr_manager.so"
 asterisk -rx "module load cdr_manager.so"
 
+# Reload CEL module
+asterisk -rx "module unload cel_manager.so"
+asterisk -rx "module load cel_manager.so"
+
 # Verify CDR manager status
 asterisk -rx "cdr show status"
+
+# Verify CEL is enabled
+asterisk -rx "cel show status"
 ```
 
-#### 2.4 Verify Setup
+#### 2.5 Verify Setup
 
 Use our visual status checker to verify your configuration:
 
@@ -194,6 +222,8 @@ docker run -d \
   -e AMI_USERNAME="manager-sipstack" \
   -e AMI_PASSWORD="your_secure_password" \
   -e REGION="us1" \
+  -e RECORDING_CHECK_INTERVAL_SECONDS="30" \
+  -e RECORDING_UPLOAD_RETRY_MINUTES="5" \
   -v /var/spool/asterisk:/var/spool/asterisk:ro \
   --log-driver json-file \
   --log-opt max-size=10m \
@@ -218,16 +248,18 @@ docker logs -f sipstack-connector
 - 🔐 **Standard Key Authentication** - Secure API access with server-managed features
 - 📦 **Flexible Processing Modes** - Choose between batch or direct sending
 - 🔗 **LinkedID & Sequence Support** - Complete call flow tracking with proper event ordering
+- 📞 **CallerID Support** - Captures and sends caller ID names for better analytics display
 - 🎯 **Minimal CDR Filtering** - Keep maximum data for analytics
 - 🌍 **Multi-region Support** - Choose from ca1, us1, us2 regions
 - 📊 **Prometheus Metrics** - Built-in monitoring on port 8000
 - 🔧 **Zero Dependencies** - No Python or system packages needed on host
 - 🔓 **Simple Permission Handling** - Just set PUID/PGID to match your asterisk user
 - ⚡ **Optimized Defaults** - Batch size 200, timeout 30s, 1GB memory for production
+- 📡 **CEL Support** - Channel Event Logging for accurate DID/DNID tracking through IVRs
 
-## Recording Support
+## Recording Support (v0.8.0+)
 
-The connector can automatically monitor and upload call recordings from your Asterisk system. When enabled, it watches specified directories for new recording files and uploads them to SIPSTACK for transcription and analysis.
+The connector automatically uploads call recordings using a periodic task that runs every minute. This approach is simpler and more reliable than file watching.
 
 ### Enabling Recording Upload
 
@@ -243,10 +275,10 @@ id asterisk
 PUID=1001
 PGID=1001
 
-# Enable recording watcher
-RECORDING_WATCHER_ENABLED=true
+# Recording configuration (v0.8.0+)
 RECORDING_WATCH_PATHS=/var/spool/asterisk/monitor
 RECORDING_FILE_EXTENSIONS=wav,mp3,gsm
+RECORDING_MIN_AGE_MINUTES=2  # Wait 2 minutes before uploading
 RECORDING_DELETE_AFTER_UPLOAD=false
 ```
 
@@ -257,10 +289,11 @@ docker-compose up -d
 ```
 
 The connector will now:
-- Monitor the specified directories for new recordings
-- Wait for files to finish writing before processing
+- Scan directories every minute for recordings older than 2 minutes
 - Upload recordings to SIPSTACK with metadata
-- Optionally delete files after successful upload
+- Move uploaded files to `.processed` subdirectory (or delete if configured)
+- Handle file stability automatically (no race conditions)
+- Run entirely within the Python process (no cron/supervisor needed)
 
 ### Permission Handling
 
@@ -343,6 +376,101 @@ RECORDING_MIN_DURATION=5
 RECORDING_MAX_AGE_HOURS=12
 ```
 
+## Voicemail Transcription Support
+
+The connector includes a voicemail mail command script that integrates with Asterisk's voicemail system to provide automatic transcription of voicemail messages. When configured, voicemails are sent to the SIPSTACK API for transcription and the results are included in the email notification.
+
+### Features
+
+- 🎤 **Automatic Transcription** - Voicemails are transcribed and included in email notifications
+- 📧 **HTML Email Templates** - Customizable HTML email templates for professional notifications
+- 🔄 **Real-time Processing** - Voicemails are processed immediately via the `/rt/voicemail` endpoint
+- 📊 **Metadata Preservation** - All voicemail metadata (caller ID, duration, etc.) is preserved
+- 🚨 **Mailbox Alerts** - Automatic warnings when mailbox is getting full
+
+### Quick Setup
+
+1. **Install required dependencies:**
+   ```bash
+   # For audio extraction
+   sudo apt-get install ripmime
+   
+   # For JSON parsing (optional but recommended)
+   sudo apt-get install jq
+   ```
+
+2. **Configure Asterisk voicemail.conf:**
+   ```ini
+   [general]
+   mailcmd=/path/to/connectors/asterisk/scripts/voicemail/mailcmd.sh
+   emailbody=p=${VM_NAME}~${VM_DATE}~${VM_CALLERID}~${VM_MAILBOX}~${VM_MSGNUM}~${VM_DUR}
+   ```
+
+3. **Copy and customize the email template:**
+   ```bash
+   sudo cp /path/to/connectors/asterisk/scripts/voicemail/email.template.default \
+           /etc/asterisk/voicemail-email.template
+   ```
+
+4. **Set your API key:**
+   ```bash
+   export VOICEMAIL_API_KEY=sk_your_api_key_here
+   # Or use the existing SK_KEY variable
+   ```
+
+5. **Set permissions:**
+   ```bash
+   # Ensure Asterisk can execute the script
+   sudo chown asterisk:asterisk /path/to/mailcmd.sh
+   sudo chmod 755 /path/to/mailcmd.sh
+   
+   # Ensure template is readable
+   sudo chown asterisk:asterisk /etc/asterisk/voicemail-email.template
+   sudo chmod 644 /etc/asterisk/voicemail-email.template
+   ```
+
+### Voicemail Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `VOICEMAIL_API_KEY` | API key for authentication | Uses `SK_KEY` if not set |
+| `VOICEMAIL_API_ENDPOINT` | API endpoint URL | `http://api-regional:3030/v1/rt/voicemail` |
+| `SENDMAIL_CMD` | Path to sendmail binary | `/usr/sbin/sendmail` |
+| `TEMP_DIR` | Temporary file directory | `/tmp` |
+| `DEBUG` | Enable debug logging (0/1) | `0` |
+
+### Template Variables
+
+The email template supports these variables:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `{{TITLE}}` | Email title/subject | "Voicemail Message #3" |
+| `{{VM_NAME}}` | Recipient name | "John Doe" |
+| `{{VM_DATE}}` | Voicemail date/time | "Mon, 21 Jan 2025 10:30:00" |
+| `{{VM_CALLERID}}` | Caller ID | "Jane Smith <555-1234>" |
+| `{{VM_MAILBOX}}` | Mailbox number | "1001" |
+| `{{VM_MSGNUM}}` | Message number | "3" |
+| `{{VM_DURATION}}` | Duration in seconds | "45" |
+| `{{TRANSCRIPTION}}` | AI transcription | "Hi John, please call me back..." |
+| `{{VM_ALERT}}` | Alert message | "Warning: Mailbox nearly full" |
+| `{{VM_ALERT_CLASS}}` | Alert CSS class | "alert-warning" |
+| `{{FOOTER}}` | Footer text | "Voicemail Service" |
+
+### Voicemail Troubleshooting
+
+Enable debug logging:
+```bash
+export DEBUG=1
+tail -f /var/log/voicemail-processor.log
+```
+
+Common issues:
+- **Permission denied**: Check script is executable and Asterisk user can access it
+- **Template not found**: Verify template exists at `/etc/asterisk/voicemail-email.template`
+- **No transcription**: Check API key is set and endpoint is reachable
+- **Email not sending**: Verify sendmail is installed and configured
+
 ## Configuration
 
 ### Environment Variables
@@ -361,15 +489,33 @@ RECORDING_MAX_AGE_HOURS=12
 
 **Note:** Set PUID/PGID in your `.env` file and Docker Compose will use them via the `user:` directive to run the container as your asterisk user.
 
-#### CDR Processing
+#### Call Direction Detection
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| ASTERISK_CONFIG_FILE | No | - | Path to JSON configuration file |
+| ASTERISK_EXT_MIN_LENGTH | No | 2 | Minimum extension length |
+| ASTERISK_EXT_MAX_LENGTH | No | 7 | Maximum extension length |
+| ASTERISK_INTL_PREFIXES | No | 011,00,+ | International dialing prefixes |
+| ASTERISK_E164_ENABLED | No | true | Enable E.164 format detection |
+| ASTERISK_ENABLE_CACHE | No | true | Enable pattern matching cache |
+| ASTERISK_CACHE_TTL | No | 3600 | Cache TTL in seconds |
+| ASTERISK_DETECT_TRANSFERS | No | true | Enable transfer detection |
+| ASTERISK_CUSTOM_CONTEXTS | No | - | JSON string with custom context patterns |
+
+#### CDR Processing (includes CEL events)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | CDR_MODE | No | batch | Processing mode: 'batch' or 'direct' |
-| CDR_BATCH_SIZE | No | 200 | Maximum CDRs per batch (batch mode) |
+| CDR_BATCH_SIZE | No | 200 | Maximum CDRs per batch (batch mode) - includes both CDR and CEL events |
 | CDR_BATCH_TIMEOUT | No | 30 | Seconds before sending partial batch |
 | CDR_BATCH_FORCE_TIMEOUT | No | 5 | Force flush interval to prevent blocking |
 | CDR_MAX_CONCURRENT | No | 10 | Max concurrent API requests (direct mode) |
+| CDR_MAX_MEMORY_FILE_SIZE | No | 10485760 | Max file size (bytes) to load into memory (10MB default) |
+| CDR_MAX_CONCURRENT_UPLOADS | No | 10 | Max concurrent file uploads |
+
+**Note:** When CDR processing is enabled, CEL events are automatically collected and sent along with CDRs to provide enhanced call tracking data, especially for calls routed through IVRs.
 
 #### CDR Filtering (Minimal Filtering for Maximum Analytics)
 
@@ -381,6 +527,18 @@ RECORDING_MAX_AGE_HOURS=12
 | CDR_FILTER_INTERNAL_ONLY | No | false | Only keep internal extension calls |
 | CDR_FILTER_MIN_DURATION | No | 0 | Minimum call duration in seconds |
 | CDR_FILTER_EXCLUDE_DST | No | h | Only exclude hangup handlers |
+
+#### Recording Upload Settings
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| RECORDING_CHECK_INTERVAL_SECONDS | No | 30 | How often to check for completed recordings (max 60 seconds) |
+| RECORDING_UPLOAD_RETRY_MINUTES | No | 5 | Minutes to wait before retrying failed uploads (0 to disable) |
+| RECORDING_WATCH_PATHS | No | /var/spool/asterisk/monitor | Comma-separated list of directories to scan |
+| RECORDING_FILE_EXTENSIONS | No | wav,mp3,gsm | Comma-separated list of file extensions to process |
+| RECORDING_MIN_FILE_SIZE | No | 1024 | Minimum file size in bytes (filters out empty files) |
+| RECORDING_MIN_AGE_MINUTES | No | 2 | Minimum file age before upload (ensures file is complete) |
+| RECORDING_DELETE_AFTER_UPLOAD | No | false | Delete recordings after successful upload (not recommended) |
 
 **New Default Strategy**: With `linkedid` support, we now keep almost all CDRs for complete call flow analytics. The only excluded destination is 'h' (hangup handlers) which provides no analytical value. All queue attempts, zero-duration calls, and 's' destinations are preserved to enable:
 - Queue performance analytics
@@ -395,16 +553,14 @@ RECORDING_MAX_AGE_HOURS=12
 | MONITORING_ENABLED | No | true | Enable Prometheus metrics |
 | MONITORING_PORT | No | 8000 | Metrics port |
 
-#### Recording Watcher
+#### Recording Upload (v0.8.0+)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| RECORDING_WATCHER_ENABLED | No | false | Enable monitoring of recording directories |
-| RECORDING_WATCH_PATHS | No | /var/spool/asterisk/monitor | Comma-separated list of directories to watch |
-| RECORDING_FILE_EXTENSIONS | No | .wav,.mp3,.gsm | Comma-separated list of file extensions to process |
+| RECORDING_WATCH_PATHS | No | /var/spool/asterisk/monitor | Comma-separated list of directories to scan |
+| RECORDING_FILE_EXTENSIONS | No | wav,mp3,gsm | Comma-separated list of file extensions to process |
 | RECORDING_MIN_FILE_SIZE | No | 1024 | Minimum file size in bytes (filters empty files) |
-| RECORDING_STABILIZATION_TIME | No | 2.0 | Time to wait for file to finish writing (seconds) |
-| RECORDING_PROCESS_EXISTING | No | false | Process existing files on startup |
+| RECORDING_MIN_AGE_MINUTES | No | 2 | Minimum file age in minutes before upload |
 | RECORDING_DELETE_AFTER_UPLOAD | No | false | Delete recording files after successful upload |
 
 #### Recording Filters
@@ -425,6 +581,100 @@ Access metrics at `http://localhost:8000/metrics`:
 - `cdrs_sent_total` - CDRs successfully sent
 - `cdrs_failed_total` - Failed CDR transmissions
 - `api_request_duration_seconds` - API response times
+
+## Call Direction Detection
+
+The connector includes sophisticated logic to accurately determine call direction (inbound, outbound, internal) for proper analytics and reporting.
+
+### Key Detection Features
+
+- **Context-Based Detection**: Uses Asterisk contexts to determine call origin and destination
+- **Channel Analysis**: Intelligently interprets Local/, SIP/, PJSIP/, and other channel types
+- **DContext Priority**: Destination context (dcontext) takes precedence for routing decisions
+- **Edge Case Handling**: Properly handles anonymous calls, voicemail, parking, and transfers
+- **Performance Optimized**: Pattern caching and pre-compiled regex for efficiency
+
+### Detection Logic Priority
+
+1. **DContext (Highest Priority)**: If destination context shows internal routing patterns (from-internal, from-phone, etc.), the call is definitively OUTBOUND or INTERNAL
+2. **Channel Type**: Local/ channels indicate internal origin
+3. **Source Context**: Determines if call originated internally or externally
+4. **Number Analysis**: Extension length and patterns help classify endpoints
+
+### Common Call Patterns
+
+| Scenario | Channel | Context | DContext | Direction |
+|----------|---------|---------|----------|-----------|
+| Extension dials external | Local/xxx@context | from-internal | - | OUTBOUND |
+| External call to extension | SIP/trunk-xxx | from-trunk | - | INBOUND |
+| Extension to extension | Local/xxx@context | from-internal | - | INTERNAL |
+| Outbound via trunk | SIP/trunk-xxx | from-trunk | from-internal | OUTBOUND |
+
+### Configuration
+
+Configure call direction detection via environment variables:
+
+```bash
+# Basic extension configuration
+export ASTERISK_EXT_MIN_LENGTH=3
+export ASTERISK_EXT_MAX_LENGTH=5
+
+# International dialing
+export ASTERISK_INTL_PREFIXES="011,00,+,9"
+export ASTERISK_E164_ENABLED=true
+
+# Custom contexts (JSON format)
+export ASTERISK_CUSTOM_CONTEXTS='{
+  "internal": ["office-*", "dept-*"],
+  "external": ["provider-acme-*", "trunk-xyz-*"],
+  "outbound": ["toll-free-*", "long-distance-*"]
+}'
+```
+
+Or use a configuration file:
+```bash
+# Set config file path
+export ASTERISK_CONFIG_FILE=/etc/asterisk-connector/config.json
+```
+
+Example `config.json`:
+```json
+{
+  "extension": {
+    "min_length": 3,
+    "max_length": 5
+  },
+  "contexts": {
+    "internal": ["office-phones-*", "department-*"],
+    "external": ["sip-provider-*", "pstn-trunk-*"],
+    "outbound": ["toll-free-route", "international-route"]
+  }
+}
+```
+
+### Call Direction Metadata
+
+The detector provides rich metadata for each call:
+```json
+{
+  "call_type": "outbound",
+  "src_type": "extension",
+  "dst_type": "international",
+  "transfer_type": null,
+  "queue_involved": false,
+  "ivr_involved": false,
+  "originated_internally": true
+}
+```
+
+### Debugging Call Direction
+
+Enable debug logging to see detection decisions:
+```bash
+export LOG_LEVEL=DEBUG
+# Logs will show: "Call direction analysis: channel=..., context=..., dcontext=..."
+# And: "Determined as OUTBOUND: SIP/external channel with internal dcontext..."
+```
 
 ## System Status Checker
 
@@ -733,6 +983,221 @@ Track filtering effectiveness via Prometheus metrics:
 Check filter stats in logs:
 ```bash
 docker logs sipstack-connector | grep "filtered\|CDR monitor stopped"
+```
+
+## Recent Updates and Fixes
+
+### Recording Upload Fixes (v0.7.13 - v0.7.16)
+
+The connector has been updated to fix critical issues with recording uploads:
+
+#### Fixed Issues:
+1. **32KB Truncation (v0.7.13)**: Recordings were being truncated at 20 seconds due to aiohttp streaming limitations
+2. **Race Condition (v0.7.14)**: Files were being uploaded before Asterisk finished writing them
+3. **Memory Safety (v0.7.15)**: Large recordings could cause memory exhaustion
+4. **File Watcher Complexity (v0.7.16)**: Complex file monitoring logic prone to edge cases
+
+#### Current Implementation (v0.8.0):
+- **Periodic Upload**: Simple, reliable upload every minute
+- **No Race Conditions**: Only processes files older than 2 minutes
+- **Memory Safety**: Still reads files into memory but with concurrent limits
+- **Simple Architecture**: Python task runs upload script, no complex file watching or cron
+
+#### Configuration:
+```bash
+# Maximum file size to load into memory (default: 10MB)
+CDR_MAX_MEMORY_FILE_SIZE=10485760
+
+# Maximum concurrent uploads (default: 10)
+CDR_MAX_CONCURRENT_UPLOADS=10
+```
+
+## Docker Memory Limit Guide
+
+### Overview
+
+When running the Asterisk connector in production, it's important to set Docker memory limits to prevent memory exhaustion and system crashes.
+
+### Memory Usage Factors
+
+The connector's memory usage depends on:
+- **Recording File Sizes**: Larger recordings consume more memory during upload
+- **Concurrent Uploads**: Multiple simultaneous uploads increase memory usage
+- **Call Volume**: Higher call volumes mean more concurrent processing
+- **Recording Formats**: WAV files are larger than MP3/GSM formats
+
+### Memory Limit Recommendations
+
+#### Small Deployments (< 100 calls/hour)
+- **Memory Limit**: 256MB
+- **Memory Reservation**: 128MB
+- **Use Case**: Small offices, testing environments
+
+```yaml
+deploy:
+  resources:
+    limits:
+      memory: 256M
+    reservations:
+      memory: 128M
+```
+
+#### Medium Deployments (100-1000 calls/hour)
+- **Memory Limit**: 512MB
+- **Memory Reservation**: 256MB
+- **Use Case**: Medium offices, small call centers
+
+```yaml
+deploy:
+  resources:
+    limits:
+      memory: 512M
+    reservations:
+      memory: 256M
+```
+
+#### Large Deployments (> 1000 calls/hour)
+- **Memory Limit**: 1GB
+- **Memory Reservation**: 512MB
+- **Use Case**: Large call centers, high-volume systems
+
+```yaml
+deploy:
+  resources:
+    limits:
+      memory: 1G
+    reservations:
+      memory: 512M
+```
+
+### Docker Compose Configuration with Memory Limits
+
+```yaml
+version: '3.8'
+
+services:
+  sipstack-connector:
+    image: ghcr.io/sipstack/asterisk-connector:latest
+    container_name: sipstack-connector
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - API_KEY=${API_KEY}
+      - REGION=${REGION}
+      - AMI_HOST=${AMI_HOST}
+      - AMI_PORT=${AMI_PORT}
+      - AMI_USERNAME=${AMI_USERNAME}
+      - AMI_PASSWORD=${AMI_PASSWORD}
+      # Memory optimization settings
+      - CDR_MAX_MEMORY_FILE_SIZE=10485760  # 10MB
+      - CDR_MAX_CONCURRENT_UPLOADS=5       # Limit concurrent uploads
+      - LOG_LEVEL=INFO                     # Reduce memory from debug logs
+    volumes:
+      - /var/spool/asterisk/monitor:/var/spool/asterisk/monitor:ro
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+```
+
+### Docker Run Command with Memory Limits
+
+```bash
+docker run -d \
+  --name sipstack-connector \
+  --network host \
+  --restart unless-stopped \
+  --memory="512m" \
+  --memory-reservation="256m" \
+  --cpus="1.0" \
+  -e API_KEY="${API_KEY}" \
+  -e REGION="${REGION}" \
+  -e AMI_HOST="${AMI_HOST}" \
+  -e AMI_PORT="${AMI_PORT}" \
+  -e AMI_USERNAME="${AMI_USERNAME}" \
+  -e AMI_PASSWORD="${AMI_PASSWORD}" \
+  -e CDR_MAX_MEMORY_FILE_SIZE="10485760" \
+  -e CDR_MAX_CONCURRENT_UPLOADS="5" \
+  -v /var/spool/asterisk/monitor:/var/spool/asterisk/monitor:ro \
+  ghcr.io/sipstack/asterisk-connector:latest
+```
+
+### Memory Optimization Settings
+
+#### Environment Variables for Memory Control
+
+1. **CDR_MAX_MEMORY_FILE_SIZE** (default: 10485760)
+   - Files larger than this are streamed in chunks
+   - Reduce for memory-constrained environments
+   - Increase if you have ample memory and want better performance
+
+2. **CDR_MAX_CONCURRENT_UPLOADS** (default: 10)
+   - Limits simultaneous file uploads
+   - Reduce to decrease memory spikes
+   - Formula: Max Memory = concurrent_uploads × max_file_size
+
+#### Recommended Settings by Memory Limit
+
+| Memory Limit | CDR_MAX_MEMORY_FILE_SIZE | CDR_MAX_CONCURRENT_UPLOADS |
+|--------------|--------------------------|----------------------------|
+| 256MB        | 5242880 (5MB)           | 3                         |
+| 512MB        | 10485760 (10MB)         | 5                         |
+| 1GB          | 20971520 (20MB)         | 10                        |
+
+### Monitoring Memory Usage
+
+```bash
+# Real-time stats
+docker stats sipstack-connector
+
+# Detailed memory info
+docker exec sipstack-connector cat /proc/meminfo
+
+# Check for OOM kills
+docker inspect sipstack-connector | grep -i oom
+```
+
+### Troubleshooting Out of Memory Issues
+
+If the container is being killed due to memory limits:
+
+1. Check logs for OOM messages:
+   ```bash
+   docker logs sipstack-connector | grep -i memory
+   journalctl -u docker | grep -i oom
+   ```
+
+2. Increase memory limit or reduce concurrent operations:
+   ```yaml
+   environment:
+     - CDR_MAX_CONCURRENT_UPLOADS=3  # Reduce from default
+     - CDR_MAX_MEMORY_FILE_SIZE=5242880  # 5MB instead of 10MB
+   ```
+
+### Production Memory Checklist
+
+- [ ] Set appropriate memory limits based on call volume
+- [ ] Configure CDR_MAX_MEMORY_FILE_SIZE for your environment
+- [ ] Limit CDR_MAX_CONCURRENT_UPLOADS to prevent spikes
+- [ ] Enable container health checks
+- [ ] Set up memory usage monitoring/alerts
+- [ ] Test with expected peak load before production
+
+### Formula for Estimating Memory Requirements
+
+```
+Base Memory: 100MB (application overhead)
++ (avg_recording_size_mb × concurrent_uploads)
++ (50MB for AMI connection and processing)
++ 20% buffer for peaks
+
+Example for medium deployment:
+100MB + (10MB × 5) + 50MB + 40MB buffer = 240MB minimum
+Recommended: 512MB limit with 256MB reservation
 ```
 
 ## License

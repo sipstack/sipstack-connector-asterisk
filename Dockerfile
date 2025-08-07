@@ -44,9 +44,11 @@ WORKDIR /app
 COPY --chown=sipstack:sipstack src/ /app/
 COPY --chown=sipstack:sipstack requirements.txt /app/
 COPY --chown=sipstack:sipstack VERSION /app/
+COPY --chown=sipstack:sipstack scripts/ /app/scripts/
 
-# Make healthcheck script executable
-RUN chmod +x /app/healthcheck.py
+# Make scripts executable
+RUN chmod +x /app/healthcheck.py && \
+    chmod +x /app/scripts/*.sh
 
 # Set environment variables
 ENV PATH="/opt/venv/bin:$PATH"

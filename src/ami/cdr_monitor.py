@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 from models.cdr import CDR, CEL
 from utils.metrics import MetricsCollector, update_cdr_queue_depth, record_cdr_dropped, record_cdr_filtered
+from utils.cdr_cache import get_cdr_cache
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,12 @@ class CDRMonitor:
                 logger.debug(f"CDR filtered out: {cdr.uniqueid} ({cdr.src} -> {cdr.dst}, disposition: {cdr.disposition})")
                 return
             
+            # Cache the CDR for recording matching
+            cdr_cache = get_cdr_cache()
+            cdr_data = cdr.to_dict()
+            cdr_data['call_type'] = cdr.call_type  # Ensure call_type is included
+            cdr_cache.add_cdr(cdr_data)
+            
             # Try to add to queue with non-blocking put
             try:
                 self.queue.put_nowait(cdr)
@@ -100,6 +107,10 @@ class CDRMonitor:
                 
             # Create CEL from event
             cel = CEL.from_ami_event(event)
+            
+            # Log IVR-related events for tracking
+            if self._is_ivr_event(cel):
+                logger.info(f"IVR event detected: {cel.eventtype} - {cel.appname} - {cel.appdata[:50] if cel.appdata else ''}")
             
             # Try to add to queue with non-blocking put
             try:
@@ -164,6 +175,26 @@ class CDRMonitor:
             # Check if both src and dst are numeric (extensions)
             if not (cdr.src.isdigit() and cdr.dst.isdigit()):
                 return True
+        
+        return False
+    
+    def _is_ivr_event(self, cel: CEL) -> bool:
+        """Check if this CEL event is IVR-related."""
+        # IVR application events
+        ivr_apps = ['BackGround', 'Background', 'Read', 'Playback', 'WaitExten', 
+                    'IVR', 'ExecIf', 'Set', 'GotoIf', 'Goto']
+        
+        # Check for IVR applications
+        if cel.eventtype == 'APP_START' and cel.appname in ivr_apps:
+            return True
+        
+        # Check for DTMF events (digit presses)
+        if cel.eventtype in ['DTMF_BEGIN', 'DTMF_END']:
+            return True
+        
+        # Check for IVR-related contexts
+        if cel.context and 'ivr' in cel.context.lower():
+            return True
         
         return False
             
