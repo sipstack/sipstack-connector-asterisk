@@ -2,7 +2,7 @@
 
 A lightweight Docker container that reads call data directly from Asterisk's database (CDR and CEL tables) and sends it to SIPSTACK's API-Regional service for real-time call analytics.
 
-## Version: 0.13.22
+## Version: 0.13.39
 
 ## Architecture Overview
 

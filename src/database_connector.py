@@ -31,7 +31,7 @@ class CallData:
     call_time: str
     duration_seconds: int
     call_threads: List[Dict]
-    call_thread_count: int
+    call_threads_count: int  # Changed from call_thread_count to match DB schema
     direction: str  # 'i'=inbound, 'o'=outbound, 'x'=internal
     disposition: str
     
@@ -1009,13 +1009,15 @@ class DatabaseConnector:
         # Direction-specific extraction
         if direction == 'i':  # Inbound
             # Source is external caller number
-            if src and src.isdigit():
+            # Clean the src first to check if it's a phone number
+            src_cleaned = ''.join(c for c in src if c.isdigit()) if src else ''
+            if src_cleaned:
                 # Keep original format for external numbers
-                if len(src) >= 10:
+                if len(src_cleaned) >= 10:
                     result['src_number'] = self._normalize_number(src)
-                elif len(src) < 10 and not result['src_extension']:
+                elif len(src_cleaned) < 10 and not result['src_extension']:
                     # Might be an extension calling in
-                    result['src_extension'] = src
+                    result['src_extension'] = src_cleaned
             elif not src and cels:
                 # src is empty - try to get caller number from CEL events
                 for cel in cels:
@@ -1041,14 +1043,15 @@ class DatabaseConnector:
                             if exten and exten.isdigit() and len(exten) >= 10:
                                 result['dst_number'] = self._normalize_number(exten)
                                 break
-            elif dst and dst.isdigit():
-                if len(dst) >= 10:
+            elif dst:
+                dst_cleaned = ''.join(c for c in dst if c.isdigit())
+                if dst_cleaned and len(dst_cleaned) >= 10:
                     # dst is the actual DID
                     result['dst_number'] = self._normalize_number(dst)
-                else:
+                elif dst_cleaned and len(dst_cleaned) < 10:
                     # dst is an extension - but still try to find the DID from CEL
                     if not result['dst_extension']:
-                        result['dst_extension'] = dst
+                        result['dst_extension'] = dst_cleaned
                     
                     # For inbound calls, even when dst is an extension, 
                     # we should try to find the DID from CEL events
@@ -1064,13 +1067,17 @@ class DatabaseConnector:
         elif direction == 'o':  # Outbound
             # Source: Extension making the call (already extracted from channel)
             # Also check if there's a caller ID number set
-            if src and src.isdigit() and len(src) >= 10:
+            # Clean the src first to check if it's a phone number
+            src_cleaned = ''.join(c for c in src if c.isdigit()) if src else ''
+            if src_cleaned and len(src_cleaned) >= 10:
                 result['src_number'] = self._normalize_number(src)
-            elif src and len(src) < 10 and not result['src_extension']:
-                result['src_extension'] = src
+            elif src_cleaned and len(src_cleaned) < 10 and not result['src_extension']:
+                result['src_extension'] = src_cleaned
             
             # Destination is external number
-            if dst and dst.isdigit() and len(dst) >= 10:
+            # Clean the dst first to check if it's a phone number
+            dst_cleaned = ''.join(c for c in dst if c.isdigit()) if dst else ''
+            if dst_cleaned and len(dst_cleaned) >= 10:
                 result['dst_number'] = self._normalize_number(dst)
         
         elif direction == 'x':  # Internal
@@ -1474,7 +1481,7 @@ class DatabaseConnector:
             call_time=call_time.isoformat(),
             duration_seconds=duration,
             call_threads=threads,
-            call_thread_count=len(threads),
+            call_threads_count=len(threads),  # Changed to match DB schema
             direction=direction,
             disposition=disposition,
             **call_details

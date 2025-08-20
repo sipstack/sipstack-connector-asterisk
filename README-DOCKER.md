@@ -225,7 +225,7 @@ print('Database connection successful')
 ## Complete Documentation
 
 For detailed setup instructions, troubleshooting, and advanced configuration:
-👉 **[Full Documentation](https://github.com/your-org/api-regional/tree/main/connectors/asterisk)**
+👉 **[Full Documentation](https://github.com/sipstack/sipstack-connector-asterisk)**
 
 ## Support
 
