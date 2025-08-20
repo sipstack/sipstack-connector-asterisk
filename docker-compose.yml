@@ -5,6 +5,8 @@ services:
         build: .
         container_name: sipstack-connector
         restart: unless-stopped
+        # REQUIRED: Host network mode for database access
+        # This allows the container to connect to localhost databases
         network_mode: host
         # Proper signal handling
         stop_signal: SIGTERM

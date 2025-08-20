@@ -15,6 +15,10 @@ prometheus-client>=0.11.0
 python-dotenv>=0.19.0
 backoff>=2.0.0  # For retry logic
 
+# Database connectivity for direct CDR/CEL reading
+pymysql>=1.0.2  # MySQL connector
+psycopg2-binary>=2.9.0  # PostgreSQL connector
+
 # File watching requirements
 watchdog>=2.1.0  # For monitoring recording directories
 

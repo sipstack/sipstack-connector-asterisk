@@ -353,7 +353,38 @@ class CDR:
         logger.info(f"AMI CDR event fields: {list(event.keys())}")
         
         # Parse the start time
-        start_time = datetime.fromisoformat(event.get('StartTime', ''))
+        start_time_str = event.get('StartTime', '')
+        if start_time_str:
+            # Parse the time, ensuring we handle timezone properly
+            # If no timezone info, assume UTC (not local time)
+            start_time = datetime.fromisoformat(start_time_str)
+            if start_time.tzinfo is None:
+                # No timezone, treat as UTC
+                from datetime import timezone
+                start_time = start_time.replace(tzinfo=timezone.utc)
+        else:
+            # No StartTime provided, extract from uniqueid/linkedid
+            # Format: hostname-unixtime.sequence (e.g., 0242036ff24c-1755204113.5195625)
+            uniqueid = event.get('UniqueID', '') or event.get('LinkedID', '')
+            if uniqueid and '-' in uniqueid and '.' in uniqueid:
+                try:
+                    # Extract Unix timestamp from uniqueid
+                    parts = uniqueid.split('-')
+                    timestamp_part = parts[-1].split('.')[0]
+                    unix_timestamp = int(timestamp_part)
+                    # Convert Unix timestamp to datetime (Unix timestamps are UTC)
+                    from datetime import timezone
+                    start_time = datetime.fromtimestamp(unix_timestamp, tz=timezone.utc)
+                    logger.debug(f"Extracted timestamp from uniqueid: {uniqueid} -> {start_time}")
+                except (ValueError, IndexError) as e:
+                    logger.warning(f"Failed to extract timestamp from uniqueid {uniqueid}: {e}")
+                    # Fallback to current time in UTC
+                    from datetime import timezone
+                    start_time = datetime.now(timezone.utc)
+            else:
+                # Fallback to current time in UTC
+                from datetime import timezone
+                start_time = datetime.now(timezone.utc)
         
         # Extract tenant information using enhanced matcher
         try:

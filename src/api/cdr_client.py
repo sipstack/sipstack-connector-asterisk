@@ -268,7 +268,7 @@ class ApiRegionalCDRClient:
                 
                 total_records = len(batch_data['cdrs']) + len(batch_data['cels'])
                 if total_records > 0:
-                    logger.info(f"Sending {total_records} records (new format) to {self.api_base_url}/mqs/cdr/batch")
+                    logger.info(f"Sending {total_records} records (new format) to {self.api_base_url}/mqs/connectors/asterisk/cdr")
                     await self._send_batch_records(batch_data)
             else:
                 # Use legacy format for CDR-only batches
@@ -287,7 +287,7 @@ class ApiRegionalCDRClient:
                         logger.debug(f"Mapped {len(batch.cdrs)} CDRs to MQS format")
                 
                 if records:
-                    logger.info(f"Sending {len(records)} records (legacy format) to {self.api_base_url}/mqs/cdr/batch")
+                    logger.info(f"Sending {len(records)} records (legacy format) to {self.api_base_url}/mqs/connectors/asterisk/cdr")
                     await self._send_batch_records(records)
                 
             # Record metrics
@@ -313,7 +313,7 @@ class ApiRegionalCDRClient:
         if not self._session:
             raise RuntimeError("Client not started. Call start() first.")
             
-        url = f"{self.api_base_url}/mqs/cdr/batch"
+        url = f"{self.api_base_url}/mqs/connectors/asterisk/cdr"
         
         headers = self._get_headers()
         logger.debug(f"Request URL: {url}")

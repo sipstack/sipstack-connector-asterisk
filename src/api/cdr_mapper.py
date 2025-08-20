@@ -62,6 +62,8 @@ class CDRMapper:
         mqs_cdr = {
             'src': cdr.src,
             'dst': cdr.dst,
+            'src_number': cdr.src,  # API expects src_number
+            'dst_number': cdr.dst,  # API expects dst_number
             'call_id': cdr.uniqueid,  # Use uniqueid as call_id
             'call_type': cdr.call_type or 'internal',
             'direction': cdr.call_type or 'internal',  # Send direction field for API consistency
@@ -70,7 +72,8 @@ class CDRMapper:
             # Additional useful fields that MQS might accept
             'billsec': cdr.billsec,
             'disposition': cdr.disposition,
-            'calldate': cdr.calldate.isoformat(),
+            'calldate': cdr.calldate.isoformat() if cdr.calldate.tzinfo else cdr.calldate.isoformat() + 'Z',
+            'started_at': cdr.calldate.isoformat() if cdr.calldate.tzinfo else cdr.calldate.isoformat() + 'Z',  # API expects started_at, not calldate
             'channel': cdr.channel,
             'dstchannel': cdr.dstchannel,
             'lastapp': cdr.lastapp,

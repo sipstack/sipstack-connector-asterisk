@@ -73,4 +73,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 EXPOSE 8000
 
 # Run the application directly
-CMD ["python", "-u", "-m", "main"]
+CMD ["python", "-u", "-m", "main_db"]
